@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agental"
+# The version is in src/agental/_version.py, which the SDK also sends with every request.
+dynamic = ["version"]
+description = "Python SDK for agental.io: Linux sandboxes over HTTP."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "VERTIXER LTD" }]
+dependencies = ["httpx>=0.27,<1"]
+keywords = ["agental", "sandbox", "agents", "virtual-machine"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://agental.io"
+Documentation = "https://agental.io/docs/python"
+Source = "https://github.com/agental-io/agental-python"
+Issues = "https://github.com/agental-io/agental-python/issues"
+
+[dependency-groups]
+dev = ["pytest>=8", "mypy>=1.11"]
+
+[tool.hatch.version]
+path = "src/agental/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agental"]
+
+# The live tests start the API from the agental repository and are kept there: they are in
+# neither the sdist nor the public repository.
+[tool.hatch.build.targets.sdist]
+exclude = ["tests/test_live.py", ".github"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
