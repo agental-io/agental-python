@@ -74,6 +74,9 @@ from .models import (
     TeamRole,
     Telemetry,
     TelemetryTest,
+    RunsOnRepositories,
+    RunsOnRepository,
+    RunsOnSandbox,
     TemplateApplied,
     TemplateInfo,
     TemplateNetwork,
@@ -1598,6 +1601,28 @@ class Agental:
         """Removes your collector, with its headers, and nothing more is sent to it. When none is set it raises an ApiError with the status 404."""
         self._http.run(_core.one(Call("DELETE", "/v1/telemetry")))
 
+    def runs_on_repositories(self) -> RunsOnRepositories:
+        """GitHub Actions jobs on sandboxes: each repository's pool, how many sandboxes of each size it keeps and the template they are made on.
+
+        available is False where jobs do not run on sandboxes here. GitHub itself is connected
+        in the console.
+        """
+        return build(RunsOnRepositories, self._http.run(_core.one(Call("GET", "/v1/runs-on/repositories", replay=True))))
+
+    def set_runs_on_repository(self, repository: str, *, pool_max: int | None = _UNSET, template_id: str | None = _UNSET) -> RunsOnRepository:
+        """Sets a repository's pool, given as owner/name.
+
+        pool_max is 1 to 50 sandboxes of each size, and template_id one of your templates, each
+        None for the default and left out to keep what was set. The template is used only where
+        GitHub says the repository is private and runs no workflows from fork pull requests.
+        """
+        body = {key: value for key, value in (("poolMax", pool_max), ("templateId", template_id)) if value is not _UNSET}
+        return build(RunsOnRepository, self._http.run(_core.one(Call("PUT", f"/v1/runs-on/repositories/{_repo_path(repository)}", body=body, replay=True))))
+
+    def reset_runs_on_repository(self, repository: str) -> None:
+        """Puts a repository's pool back to the defaults. Its sandboxes are kept. When it has no settings it raises an ApiError with the status 404."""
+        self._http.run(_core.one(Call("DELETE", f"/v1/runs-on/repositories/{_repo_path(repository)}")))
+
     def get_data_retention(self) -> DataRetention:
         """How long your sandboxes' history is kept: the output of their commands, their agent conversations and their events.
 
@@ -1696,3 +1721,11 @@ def _window(since: str | datetime | None, until: str | datetime | None, step_sec
 
 def _ms(timeout: float | None) -> int | None:
     return None if timeout is None else round(timeout * 1000)
+
+
+def _repo_path(repository: str) -> str:
+    """owner/name as a path: each part quoted, the slash between them kept."""
+    parts = repository.split("/")
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError(f"A repository is owner/name, as acme/app, and not {repository!r}.")
+    return f"{quote(parts[0], safe='')}/{quote(parts[1], safe='')}"

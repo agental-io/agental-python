@@ -1236,6 +1236,40 @@ class TelemetryTest:
 
 
 @dataclass
+class RunsOnSandbox:
+    """One sandbox of a repository's runs-on pool."""
+
+    sandbox_id: str
+    name: str
+    size: str
+    #: Whether a job holds it now.
+    busy: bool
+
+
+@dataclass
+class RunsOnRepository:
+    """A repository's runs-on pool: how many sandboxes of each size it keeps, the template they are made on, and the ones it has."""
+
+    #: owner/name, in lower case.
+    repository: str
+    #: The most sandboxes of each size its pool keeps. None: the deployment's.
+    pool_max: int | None
+    #: The template its pool sandboxes are made on. None: the empty runs-on template. A fork's job always gets the empty one.
+    template_id: str | None
+    sandboxes: list[RunsOnSandbox]
+
+
+@dataclass
+class RunsOnRepositories:
+    """Each repository's runs-on pool, and the size a pool keeps where none was set."""
+
+    #: Whether GitHub Actions jobs run on sandboxes here.
+    available: bool
+    default_pool_max: int | None
+    repositories: list[RunsOnRepository]
+
+
+@dataclass
 class WebhookDelivery:
     """One try at posting an event to a webhook, and what came of it."""
 
