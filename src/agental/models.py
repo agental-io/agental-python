@@ -702,6 +702,8 @@ class Policy:
     metrics: bool
     #: Whether an account's sandbox metrics and lifecycle events can be sent to a collector of its own here.
     telemetry: bool
+    #: Whether GitHub Actions jobs can run on sandboxes here: an organization connects GitHub in the console, and a job asks for runs-on: agental-<size>. False from an API older than that.
+    runs_on: bool = False
     #: The npm package the agental command is published as, for npx <it>@latest. None until it is published.
     cli_package: str | None = None
     #: Where the console is, such as https://console.agental.io: its Billing page is console_url/billing.
