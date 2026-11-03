@@ -306,6 +306,7 @@ class AsyncSchedules:
         *,
         every: str | None = None,
         cron: str | None = None,
+        at: str | None = None,
         name: str | None = None,
         time_zone: str | None = None,
         timeout: float | None = None,
@@ -314,12 +315,12 @@ class AsyncSchedules:
         overlap: str | None = None,
         enabled: bool | None = None,
     ) -> Schedule:
-        """Makes a schedule: what it runs, through sh -c, and every ("15m", "1h", "1d") or cron ("0 7 * * 1-5", in time_zone).
+        """Makes a schedule: what it runs, through sh -c, and every ("15m", "1h", "1d"), cron ("0 7 * * 1-5", in time_zone), or at, once ("2026-11-04T09:00:00Z").
 
         timeout is how long a run may take, in seconds, up to six hours: 600 unless it says. One that
         may start the sandbox needs a key that may start and stop it; if_stopped="skip" runs only while it runs.
         """
-        body = _schedule_body(command=command, every=every, cron=cron, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), if_stopped=if_stopped, keep_memory=keep_memory, overlap=overlap, enabled=enabled)
+        body = _schedule_body(command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), if_stopped=if_stopped, keep_memory=keep_memory, overlap=overlap, enabled=enabled)
         return build(Schedule, await self._http.run(_core.one(Call("POST", self._path, body=body))))
 
     async def get(self, schedule_id: str) -> Schedule:
@@ -333,6 +334,7 @@ class AsyncSchedules:
         command: str | None = None,
         every: str | None = None,
         cron: str | None = None,
+        at: str | None = None,
         name: str | None = None,
         time_zone: str | None = None,
         timeout: float | None = None,
@@ -342,7 +344,7 @@ class AsyncSchedules:
         enabled: bool | None = None,
     ) -> Schedule:
         """Changes a schedule. What is left out is as it was; enabled=False pauses it."""
-        body = _schedule_body(command=command, every=every, cron=cron, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), if_stopped=if_stopped, keep_memory=keep_memory, overlap=overlap, enabled=enabled)
+        body = _schedule_body(command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), if_stopped=if_stopped, keep_memory=keep_memory, overlap=overlap, enabled=enabled)
         return build(Schedule, await self._http.run(_core.one(Call("PATCH", f"{self._path}/{quote(schedule_id, safe='')}", body=body, replay=True))))
 
     async def delete(self, schedule_id: str) -> None:

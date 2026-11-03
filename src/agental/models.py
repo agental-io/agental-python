@@ -422,8 +422,10 @@ class Schedule:
     command: str
     #: How often, as 15m, 1h or 1d, counted from when it was made. None when cron says.
     every: str | None
-    #: When, as a five-field cron expression in time_zone. None when every says.
+    #: When, as a five-field cron expression in time_zone. None when every or at says.
     cron: str | None
+    #: The one time it runs, for a schedule that runs once. None for one that runs again and again.
+    at: str | None
     time_zone: str
     #: How long a run may take, in milliseconds, as the API says it. create() and update() take it in seconds, as timeout.
     timeout_ms: int
@@ -434,8 +436,10 @@ class Schedule:
     #: skip, replace or parallel: what a run does while the last one still goes.
     overlap: str
     enabled: bool
-    #: When it next runs. None while it is paused.
+    #: When it next runs. None while it is paused, and for one that ran once.
     next_run_at: str | None
+    #: Why it paused itself, after runs one after another failed. None for one paused by hand, or running.
+    paused_reason: str | None
     last_run: ScheduleRun | None
     created_at: str
     updated_at: str
