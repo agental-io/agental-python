@@ -97,6 +97,7 @@ sandbox.files.read_bytes("logo.png")
 
 ```python
 sandbox.stop()   # the disk is kept, what was running is not, and it costs 5% of the running price
+sandbox.stop(keep_memory=True)  # or keep its memory too, at 10%: start() puts back every process as it was
 sandbox.start()  # waits until it is running, also when it has to be brought back from storage
 
 copy = sandbox.fork()  # a new sandbox with the same disk

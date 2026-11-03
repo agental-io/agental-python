@@ -98,6 +98,21 @@ def scripted(*answers: httpx.Response | Exception) -> tuple[Agental, Script]:
     return client, script
 
 
+def test_a_stop_sends_no_body_and_keep_memory_when_it_is_asked_for() -> None:
+    agental, script = scripted(
+        answer(200, sandbox()),
+        answer(200, sandbox(status="stopped", memoryKept=False)),
+        answer(200, sandbox(status="stopped", memoryKept=True)),
+    )
+    box = agental.sandboxes.get(ID)
+    box.stop()
+    assert (script.sent[1].method, script.sent[1].url.path, script.sent[1].content) == ("POST", f"/v1/sandboxes/{ID}/stop", b"")
+    assert box.info.memory_kept is False
+    box.stop(keep_memory=True)
+    assert script.body(2) == {"keepMemory": True}
+    assert box.info.memory_kept is True
+
+
 def test_a_create_sends_a_key_and_a_name_of_its_own() -> None:
     agental, script = scripted(answer(201, sandbox()), answer(201, sandbox()))
     made = agental.sandboxes.create(size="medium")

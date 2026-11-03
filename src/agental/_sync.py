@@ -1030,9 +1030,16 @@ class Sandbox:
         for event in self._http.stream(_core.command_call(f"{self._path}/exec/stream", command, _ms(timeout))):
             yield event
 
-    def stop(self) -> Sandbox:
-        """Stops it. The disk is kept, with everything on it, at 5% of the running price where that is charged. What was running is not."""
-        self._read(self._http.run(_core.one(Call("POST", f"{self._path}/stop", replay=True))))
+    def stop(self, *, keep_memory: bool = False) -> Sandbox:
+        """
+        Stops it. The disk is kept, with everything on it, at 5% of the running price where
+        that is charged. What was running is not, unless keep_memory: then its memory is kept
+        too, at 10% of the running price, and start() puts back every process as it was. That
+        answers once the memory is written, about a second for each 110 MB the sandbox uses.
+        info.memory_kept says whether it was, and after start(), info.memory_lost why not.
+        """
+        body = {"keepMemory": True} if keep_memory else None
+        self._read(self._http.run(_core.one(Call("POST", f"{self._path}/stop", body=body, replay=True))))
         return self
 
     def start(

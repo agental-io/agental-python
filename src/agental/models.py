@@ -196,6 +196,10 @@ class SandboxInfo:
     own_tags: list[str] | None = None
     #: Of its metadata, the keys it sets itself. None from an API older than it.
     own_metadata: dict[str, str] | None = None
+    #: True while it is stopped with its memory kept: a start puts back every process as it was. None from an API older than it.
+    memory_kept: bool | None = None
+    #: Why the memory its last stop kept was not put back by its last start, which started it from its disk. None when it was, or none was kept.
+    memory_lost: str | None = None
 
 
 @dataclass
@@ -704,6 +708,8 @@ class Policy:
     telemetry: bool
     #: Whether GitHub Actions jobs can run on sandboxes here: an organization connects GitHub in the console, and a job asks for runs-on: agental-<size>. False from an API older than that.
     runs_on: bool = False
+    #: Whether a sandbox can be stopped with its memory kept here: stop(keep_memory=True). False from an API older than that.
+    keep_memory: bool = False
     #: The npm package the agental command is published as, for npx <it>@latest. None until it is published.
     cli_package: str | None = None
     #: Where the console is, such as https://console.agental.io: its Billing page is console_url/billing.
@@ -1398,6 +1404,8 @@ class SizePrice:
     label: str
     #: What an hour of it stopped costs, with its disk kept: 5% of the list price. None from an API older than it.
     stopped_micros_per_hour: int | None = None
+    #: What an hour of it stopped with its memory kept costs, its disk kept too: 10% of the list price. None from an API older than it.
+    stopped_with_memory_micros_per_hour: int | None = None
 
 
 @dataclass
@@ -1494,6 +1502,8 @@ class StoragePrices:
     free_snapshots: int
     #: What each snapshot past them costs an hour: $1.70 over a month.
     snapshot_micros_per_hour: int
+    #: A share of its running price for a sandbox stopped with its memory kept. None from an API older than it.
+    stopped_with_memory_percent: float | None = None
 
 
 @dataclass
