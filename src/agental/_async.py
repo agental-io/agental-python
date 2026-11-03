@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import builtins
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
 from types import TracebackType
@@ -68,6 +69,8 @@ from .models import (
     SendEmailAttachment,
     Size,
     Snapshot,
+    Schedule,
+    ScheduleRun,
     SshKey,
     SshState,
     Team,
@@ -278,6 +281,89 @@ class AsyncSsh:
         A key that is not there answers not_found, as a second try does after a first whose answer was lost.
         """
         await self._http.run(_core.one(Call("DELETE", f"{self._path}/keys/{quote(key_id, safe='')}", replay=True)))
+
+
+class AsyncSchedules:
+    """Commands the sandbox runs on a schedule: every so many minutes, hours or days, or as a cron expression says in a time zone.
+
+    The API keeps them, so a run that finds the sandbox stopped starts it, by default, and stops
+    it again when the command ends, keeping its disk. A run that started it leaves it running if
+    someone else began to use it meanwhile.
+    """
+
+    def __init__(self, http: _Http, path: str) -> None:
+        self._http = http
+        self._path = path
+
+    async def list(self) -> list[Schedule]:
+        """The sandbox's schedules, oldest first, each with its last run."""
+        body = await self._http.run(_core.one(Call("GET", self._path, replay=True)))
+        return [build(Schedule, schedule) for schedule in body.get("schedules", [])]
+
+    async def create(
+        self,
+        command: str,
+        *,
+        every: str | None = None,
+        cron: str | None = None,
+        name: str | None = None,
+        time_zone: str | None = None,
+        timeout: float | None = None,
+        if_stopped: str | None = None,
+        keep_memory: bool | None = None,
+        overlap: str | None = None,
+        enabled: bool | None = None,
+    ) -> Schedule:
+        """Makes a schedule: what it runs, through sh -c, and every ("15m", "1h", "1d") or cron ("0 7 * * 1-5", in time_zone).
+
+        timeout is how long a run may take, in seconds, up to six hours: 600 unless it says. One that
+        may start the sandbox needs a key that may start and stop it; if_stopped="skip" runs only while it runs.
+        """
+        body = _schedule_body(command=command, every=every, cron=cron, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), if_stopped=if_stopped, keep_memory=keep_memory, overlap=overlap, enabled=enabled)
+        return build(Schedule, await self._http.run(_core.one(Call("POST", self._path, body=body))))
+
+    async def get(self, schedule_id: str) -> Schedule:
+        """A schedule, with its next run and its last."""
+        return build(Schedule, await self._http.run(_core.one(Call("GET", f"{self._path}/{quote(schedule_id, safe='')}", replay=True))))
+
+    async def update(
+        self,
+        schedule_id: str,
+        *,
+        command: str | None = None,
+        every: str | None = None,
+        cron: str | None = None,
+        name: str | None = None,
+        time_zone: str | None = None,
+        timeout: float | None = None,
+        if_stopped: str | None = None,
+        keep_memory: bool | None = None,
+        overlap: str | None = None,
+        enabled: bool | None = None,
+    ) -> Schedule:
+        """Changes a schedule. What is left out is as it was; enabled=False pauses it."""
+        body = _schedule_body(command=command, every=every, cron=cron, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), if_stopped=if_stopped, keep_memory=keep_memory, overlap=overlap, enabled=enabled)
+        return build(Schedule, await self._http.run(_core.one(Call("PATCH", f"{self._path}/{quote(schedule_id, safe='')}", body=body, replay=True))))
+
+    async def delete(self, schedule_id: str) -> None:
+        """Deletes a schedule and its runs. A run under way goes on to its end."""
+        await self._http.run(_core.one(Call("DELETE", f"{self._path}/{quote(schedule_id, safe='')}", replay=True)))
+
+    async def run(self, schedule_id: str) -> ScheduleRun:
+        """Makes a run now, by the schedule's own rules, paused or not, and answers as it begins. Its next run does not move."""
+        return build(ScheduleRun, await self._http.run(_core.one(Call("POST", f"{self._path}/{quote(schedule_id, safe='')}/run"))))
+
+    async def runs(self, schedule_id: str, *, limit: int | None = None) -> builtins.list[ScheduleRun]:
+        """Its runs, the latest first: 100 unless limit says, at most 500."""
+        query = {"limit": None if limit is None else str(limit)}
+        body = await self._http.run(_core.one(Call("GET", f"{self._path}/{quote(schedule_id, safe='')}/runs", query=query, replay=True)))
+        return [build(ScheduleRun, run) for run in body.get("runs", [])]
+
+
+def _schedule_body(**fields: Any) -> dict[str, Any]:
+    """A schedule's fields as the API takes them: in its names, with what was not given left out."""
+    names = {"time_zone": "timeZone", "timeout_ms": "timeoutMs", "if_stopped": "ifStopped", "keep_memory": "keepMemory"}
+    return {names.get(key, key): value for key, value in fields.items() if value is not None}
 
 
 class AsyncDesktop:
@@ -861,6 +947,8 @@ class AsyncSandbox:
         self.desktop = AsyncDesktop(http, f"{self._path}/desktop")
         self.browser = AsyncBrowser(http, f"{self._path}/browser")
         self.ssh = AsyncSsh(http, f"{self._path}/ssh")
+        #: Commands it runs on a schedule, started for the run when it is stopped.
+        self.schedules = AsyncSchedules(http, f"{self._path}/schedules")
         #: Its own secrets, on top of its template's. A change is used from its next command, without a restart.
         self.secrets = AsyncSecrets(http, f"{self._path}/secrets")
 

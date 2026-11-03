@@ -388,6 +388,60 @@ class Command:
 
 
 @dataclass
+class ScheduleRun:
+    """One run of a schedule: when it was due, how it ended, and whether it started and stopped its sandbox."""
+
+    id: str
+    schedule_id: str
+    sandbox_id: str
+    due_at: str
+    #: When its command began. None for one that did not run.
+    started_at: str | None
+    finished_at: str | None
+    #: running; succeeded, failed or timed_out, as its command ended; replaced, skipped, missed, could_not_start or interrupted.
+    outcome: str
+    #: Why it ended as it did, in words, where the outcome does not say.
+    reason: str | None
+    exit_code: int | None
+    #: Its command, whose output Sandbox.commands.get() reads.
+    command_id: str | None
+    #: Whether this run started its sandbox, which was stopped.
+    started_sandbox: bool
+    #: disk or memory: how this run stopped the sandbox it started. None when it did not stop it.
+    stopped_sandbox: str | None
+
+
+@dataclass
+class Schedule:
+    """A command a sandbox runs on a schedule, with its last run."""
+
+    id: str
+    sandbox_id: str
+    name: str
+    #: What it runs, through sh -c.
+    command: str
+    #: How often, as 15m, 1h or 1d, counted from when it was made. None when cron says.
+    every: str | None
+    #: When, as a five-field cron expression in time_zone. None when every says.
+    cron: str | None
+    time_zone: str
+    #: How long a run may take, in milliseconds, as the API says it. create() and update() take it in seconds, as timeout.
+    timeout_ms: int
+    #: start: a run starts a stopped sandbox, and stops it again after. skip: a run that finds it stopped is skipped.
+    if_stopped: str
+    #: Whether a run that started the sandbox stops it with its memory kept.
+    keep_memory: bool
+    #: skip, replace or parallel: what a run does while the last one still goes.
+    overlap: str
+    enabled: bool
+    #: When it next runs. None while it is paused.
+    next_run_at: str | None
+    last_run: ScheduleRun | None
+    created_at: str
+    updated_at: str
+
+
+@dataclass
 class Snapshot:
     id: str
     sandbox_id: str

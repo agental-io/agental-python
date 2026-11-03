@@ -2014,3 +2014,40 @@ def test_a_teams_members_and_invites_are_read_and_changed_through_organizations(
     assert [each.id for each in agental.organizations.invites()] == ["inv_1"]
     agental.organizations.revoke_invite("inv_1")
     assert (script.sent[9].method, script.sent[9].url.path) == ("DELETE", "/v1/invites/inv_1")
+
+
+def test_a_sandboxs_schedules_are_listed_made_read_changed_run_their_runs_read_and_deleted() -> None:
+    run = {"id": "run_1", "scheduleId": "sch_1", "sandboxId": ID, "dueAt": "2026-11-03T16:00:00.000Z", "startedAt": None, "finishedAt": None, "outcome": "running", "reason": None, "exitCode": None, "commandId": None, "startedSandbox": False, "stoppedSandbox": None}
+    schedule = {
+        "id": "sch_1", "sandboxId": ID, "name": "scrape", "command": "python scrape.py", "every": "1h", "cron": None, "timeZone": "UTC",
+        "timeoutMs": 600000, "ifStopped": "start", "keepMemory": False, "overlap": "skip", "enabled": True,
+        "nextRunAt": "2026-11-03T17:00:00.000Z", "lastRun": run, "createdAt": "2026-11-03T16:00:00.000Z", "updatedAt": "2026-11-03T16:00:00.000Z",
+    }
+    agental, script = scripted(
+        answer(200, sandbox()),
+        answer(200, {"schedules": [schedule]}),
+        answer(201, schedule),
+        answer(200, schedule),
+        answer(200, {**schedule, "enabled": False, "nextRunAt": None}),
+        answer(202, run),
+        answer(200, {"runs": [run]}),
+        answer(204),
+    )
+    box = agental.sandboxes.get(ID)
+    at = f"/v1/sandboxes/{ID}/schedules"
+
+    listed = box.schedules.list()
+    assert (listed[0].id, listed[0].last_run.outcome if listed[0].last_run else None) == ("sch_1", "running")
+    assert (script.sent[1].method, script.sent[1].url.path) == ("GET", at)
+    assert box.schedules.create("python scrape.py", every="1h", name="scrape", if_stopped="start", keep_memory=True, timeout=1800).every == "1h"
+    assert (script.sent[2].method, script.body(2)) == ("POST", {"command": "python scrape.py", "every": "1h", "name": "scrape", "timeoutMs": 1800000, "ifStopped": "start", "keepMemory": True})
+    assert box.schedules.get("sch_1").time_zone == "UTC"
+    assert (script.sent[3].method, script.sent[3].url.path) == ("GET", f"{at}/sch_1")
+    assert box.schedules.update("sch_1", enabled=False).next_run_at is None
+    assert (script.sent[4].method, script.body(4)) == ("PATCH", {"enabled": False})
+    assert box.schedules.run("sch_1").started_sandbox is False
+    assert (script.sent[5].method, script.sent[5].url.path) == ("POST", f"{at}/sch_1/run")
+    assert [one.id for one in box.schedules.runs("sch_1", limit=5)] == ["run_1"]
+    assert (script.sent[6].method, script.sent[6].url.path, script.sent[6].url.query) == ("GET", f"{at}/sch_1/runs", b"limit=5")
+    box.schedules.delete("sch_1")
+    assert (script.sent[7].method, script.sent[7].url.path) == ("DELETE", f"{at}/sch_1")
