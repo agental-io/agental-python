@@ -113,6 +113,25 @@ def test_a_stop_sends_no_body_and_keep_memory_when_it_is_asked_for() -> None:
     assert box.info.memory_kept is True
 
 
+def test_a_stop_that_keeps_memory_and_is_answered_202_reads_the_sandbox_until_it_has_stopped() -> None:
+    op = {"id": "op_1", "type": "stop", "status": "pending", "sandboxId": ID, "error": None, "createdAt": "2026-10-13T00:00:00.000Z", "updatedAt": "2026-10-13T00:00:00.000Z"}
+    agental, script = scripted(
+        answer(200, sandbox()),
+        answer(202, sandbox(), **{"operation-id": "op_1"}),
+        answer(200, {"operation": op, "sandbox": sandbox()}),
+        answer(200, sandbox(status="stopped", memoryKept=True)),
+    )
+    box = agental.sandboxes.get(ID)
+    box.stop(keep_memory=True)
+    assert (box.status, box.info.memory_kept) == ("stopped", True)
+    assert [(one.method, one.url.path) for one in script.sent] == [
+        ("GET", f"/v1/sandboxes/{ID}"),
+        ("POST", f"/v1/sandboxes/{ID}/stop"),
+        ("GET", "/v1/operations/op_1"),
+        ("GET", f"/v1/sandboxes/{ID}"),
+    ]
+
+
 def test_a_create_sends_a_key_and_a_name_of_its_own() -> None:
     agental, script = scripted(answer(201, sandbox()), answer(201, sandbox()))
     made = agental.sandboxes.create(size="medium")

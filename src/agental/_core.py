@@ -313,6 +313,26 @@ def archive(path: str, wait: bool, timeout: float, config: Settings) -> Steps:
     return info
 
 
+def stop(path: str, keep_memory: bool, timeout: float, config: Settings) -> Steps:
+    answer: Answer = yield Call("POST", f"{path}/stop", body={"keepMemory": True} if keep_memory else None, replay=True)
+    info = answer.body
+    if answer.status != 202:
+        return info
+    # Its memory is still being written, and the stop goes on: read it until it has stopped.
+    operation_id = answer.headers.get("operation-id")
+    deadline = time.monotonic() + timeout
+    while info["status"] != "stopped":
+        if operation_id:
+            operation = (yield from one(Call("GET", f"/v1/operations/{operation_id}", replay=True)))["operation"]
+            if operation["status"] == "failed":
+                raise AgentalError(f"Sandbox {info['id']} was not stopped: {operation.get('error') or 'the stop failed'}")
+        if time.monotonic() + config.poll_interval > deadline:
+            raise AgentalTimeoutError(f"Sandbox {info['id']} was still writing its memory after {timeout:g} s. The stop goes on.")
+        yield Sleep(config.poll_interval)
+        info = yield from one(Call("GET", path, replay=True))
+    return info
+
+
 def start_command(path: str, command: str | list[str] | tuple[str, ...], timeout_ms: int | None) -> Steps:
     started = yield from one(command_call(path, command, timeout_ms))
     return (yield from one(Call("GET", f"{path}/{started['id']}", replay=True)))
