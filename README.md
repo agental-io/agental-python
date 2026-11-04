@@ -3,10 +3,10 @@
 Python SDK for [agental.io](https://agental.io): a Linux virtual machine of your own over HTTP. One call makes it, another runs a command in it, another stops it. Its disk is kept while it is stopped.
 
 ```bash
-pip install agental
+pip install agental-sdk
 ```
 
-Python 3.10 or later. It depends on `httpx` and nothing else.
+Then `from agental import Agental`. Python 3.10 or later. It depends on `httpx` and nothing else.
 
 ## Start
 

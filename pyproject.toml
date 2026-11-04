@@ -3,7 +3,9 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agental"
+# PyPI takes "agental" for "agentai", an existing project, so the distribution is agental-sdk;
+# what is imported is still agental.
+name = "agental-sdk"
 # The version is in src/agental/_version.py, which the SDK also sends with every request.
 dynamic = ["version"]
 description = "Python SDK for agental.io: Linux sandboxes over HTTP."
