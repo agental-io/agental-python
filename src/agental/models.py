@@ -764,7 +764,7 @@ class Policy:
     metrics: bool
     #: Whether an account's sandbox metrics and lifecycle events can be sent to a collector of its own here.
     telemetry: bool
-    #: Whether GitHub Actions jobs can run on sandboxes here: an organization connects GitHub in the console, and a job asks for runs-on: agental-<size>. False from an API older than that.
+    #: Whether GitHub Actions jobs can run on sandboxes here: an organization connects GitHub in the console, and a job asks for runs-on: agental or agental-<size>. False from an API older than that.
     runs_on: bool = False
     #: Whether a sandbox can be stopped with its memory kept here: stop(keep_memory=True). False from an API older than that.
     keep_memory: bool = False
@@ -1321,6 +1321,8 @@ class RunsOnRepository:
     #: The template its pool sandboxes are made on. None: the empty runs-on template. A fork's job always gets the empty one.
     template_id: str | None
     sandboxes: list[RunsOnSandbox]
+    #: The size a job that asks for runs-on: agental gets: its template's, or medium with none. agental-<size> gets that size. None from an API older than that.
+    size: str | None = None
 
 
 @dataclass
