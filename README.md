@@ -96,6 +96,7 @@ sandbox.schedules.update(tick.id, enabled=False)  # paused
 - When a run finds the sandbox stopped, it starts it, runs, and stops it again when the command ends, keeping its disk: you pay for the minutes it runs. `keep_memory=True` keeps its memory too. `if_stopped="skip"` runs only while it runs.
 - A sandbox someone started again, sent a command or moved the stop of meanwhile is left running.
 - Every 5 minutes at the most: for anything more often, leave the sandbox running and loop inside it. `at` runs it once, at a date and time, as for a check you mean to come back to.
+- With `at`, `delete_after=True` deletes the sandbox once the run's command exits 0, whether the run started it or not; the run says so in `deleted_sandbox`. A run that fails, times out or does not run leaves it, so that it can be looked at. It takes a key that may delete the sandbox.
 - After 10 runs one after another fail, a schedule pauses itself and says why in `paused_reason`; resuming it clears that.
 - While a run still goes, the next is skipped. `overlap="replace"` stops it instead, `"parallel"` runs both.
 - A run gets 10 minutes unless `timeout` says, in seconds, up to six hours. One that could not be made on time is `missed`, and never made up later.

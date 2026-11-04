@@ -2046,3 +2046,18 @@ def test_a_sandboxs_schedules_are_listed_made_read_changed_run_their_runs_read_a
     assert (script.sent[6].method, script.sent[6].url.path, script.sent[6].url.query) == ("GET", f"{at}/sch_1/runs", b"limit=5")
     box.schedules.delete("sch_1")
     assert (script.sent[7].method, script.sent[7].url.path) == ("DELETE", f"{at}/sch_1")
+
+
+def test_a_schedule_that_runs_once_is_asked_to_delete_its_sandbox_after_and_its_run_says_it_did() -> None:
+    run = {"id": "run_1", "scheduleId": "sch_1", "sandboxId": ID, "dueAt": "2026-11-04T09:00:20.000Z", "startedAt": "2026-11-04T09:00:21.000Z", "finishedAt": "2026-11-04T09:00:30.000Z", "outcome": "succeeded", "reason": None, "exitCode": 0, "commandId": "cmd_1", "startedSandbox": False, "stoppedSandbox": None, "deletedSandbox": True}
+    schedule = {
+        "id": "sch_1", "sandboxId": ID, "name": "last", "command": "./finish.sh", "every": None, "cron": None, "at": "2026-11-04T09:00:00.000Z", "timeZone": "UTC",
+        "timeoutMs": 600000, "ifStopped": "start", "keepMemory": False, "overlap": "skip", "deleteAfter": True, "enabled": True,
+        "nextRunAt": None, "pausedReason": None, "lastRun": run, "createdAt": "2026-11-03T16:00:00.000Z", "updatedAt": "2026-11-03T16:00:00.000Z",
+    }
+    agental, script = scripted(answer(200, sandbox()), answer(201, schedule), answer(200, {"runs": [run]}))
+    box = agental.sandboxes.get(ID)
+    made = box.schedules.create("./finish.sh", at="2026-11-04T09:00:00Z", delete_after=True)
+    assert made.delete_after is True
+    assert script.body(1) == {"command": "./finish.sh", "at": "2026-11-04T09:00:00Z", "deleteAfter": True}
+    assert box.schedules.runs("sch_1")[0].deleted_sandbox is True

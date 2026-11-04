@@ -399,6 +399,8 @@ class ScheduleRun:
     started_sandbox: bool
     #: disk or memory: how this run stopped the sandbox it started. None when it did not stop it.
     stopped_sandbox: str | None
+    #: Whether this run deleted its sandbox after its command exited 0, as its schedule's delete_after asks. False from an API older than that.
+    deleted_sandbox: bool = False
 
 
 @dataclass
@@ -433,6 +435,8 @@ class Schedule:
     last_run: ScheduleRun | None
     created_at: str
     updated_at: str
+    #: Whether its run deletes the sandbox after, where its command exits 0. Only a schedule that runs once has it. False from an API older than that.
+    delete_after: bool = False
 
 
 @dataclass
