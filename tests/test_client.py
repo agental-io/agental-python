@@ -1377,7 +1377,6 @@ def template(**changes: Any) -> dict[str, Any]:
         "variables": ["API_TOKEN"],
         "hidden": [],
         "files": [".npmrc"],
-        "repo": None,
         "network": {"outbound": "open", "allow": []},
         "revision": 3,
         "sandboxes": 1,
@@ -1551,12 +1550,10 @@ def test_a_variable_from_an_api_that_does_not_say_whether_it_is_kept_out_is_plai
     assert made.secrets.hidden() == []
 
 
-def test_a_templates_start_repository_sandboxes_and_apply_ask_for_what_the_api_needs() -> None:
+def test_a_templates_start_sandboxes_and_apply_ask_for_what_the_api_needs() -> None:
     agental, script = scripted(
         answer(200, template()),
         answer(200, {"size": "large", "snapshotId": "snap_1", "ttlSeconds": None}),
-        answer(200, {"name": "you/agent", "url": "https://github.com/you/agent", "connected": False}),
-        httpx.Response(200, content=b"null", headers={"content-type": "application/json"}),
         answer(200, {"sandboxes": [{"id": ID, "name": "agent-1", "status": "running", "upToDate": False, "takenAt": "", "allow": []}]}),
         answer(200, {"templateId": "tpl_0000000000000002", "revision": 4, "applied": [ID], "failed": []}),
         answer(200, {"templateId": "tpl_0000000000000002", "revision": 4, "applied": [], "failed": []}),
@@ -1566,13 +1563,11 @@ def test_a_templates_start_repository_sandboxes_and_apply_ask_for_what_the_api_n
     start = made.set_start("large", snapshot_id="snap_1")
     assert (start.size, start.snapshot_id, made.info.start.size) == ("large", "snap_1", "large")
     assert (script.sent[1].method, script.body(1)) == ("PUT", {"size": "large", "snapshotId": "snap_1"})
-    assert made.set_repo("you/agent", "https://github.com/you/agent").connected is False
-    assert made.repo() is None
     assert made.sandboxes()[0].up_to_date is False
     assert made.apply([ID]).applied == [ID]
-    assert script.body(5) == {"sandboxIds": [ID]}
+    assert script.body(3) == {"sandboxIds": [ID]}
     made.apply()
-    assert (script.sent[6].url.path, script.body(6)) == ("/v1/templates/tpl_0000000000000002/apply", {})
+    assert (script.sent[4].url.path, script.body(4)) == ("/v1/templates/tpl_0000000000000002/apply", {})
     with pytest.raises(ApiError) as refused:
         made.delete()
     assert refused.value.code == "template_in_use"

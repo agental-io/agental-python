@@ -231,15 +231,6 @@ class TemplateStart:
 
 
 @dataclass
-class TemplateRepo:
-    """The repository a template links to, for reference. Nothing is cloned."""
-
-    name: str
-    url: str
-    connected: bool
-
-
-@dataclass
 class TemplateInfo:
     """A template as the API reports it: its start, its outbound rule, and the names of its variables and files, never their values."""
 
@@ -252,7 +243,6 @@ class TemplateInfo:
     #: Of its variables, the ones kept out of the sandbox.
     hidden: list[str]
     files: list[str]
-    repo: TemplateRepo | None
     #: What a sandbox on it may reach outside itself, before its own addresses.
     network: TemplateNetwork
     #: Raised by every change to its variables, files and outbound rule.

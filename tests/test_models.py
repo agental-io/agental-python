@@ -49,7 +49,6 @@ NAMED = {
     "TemplateStart": models.TemplateStart,
     "TemplateNetwork": models.TemplateNetwork,
     "SandboxNetworkDetail": models.SandboxNetworkDetail,
-    "TemplateRepo": models.TemplateRepo,
     "SandboxTemplate": models.SandboxTemplate,
     "TemplateApplied": models.TemplateApplied,
     "SandboxMetrics": models.SandboxMetrics,

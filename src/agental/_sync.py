@@ -83,7 +83,6 @@ from .models import (
     TemplateApplied,
     TemplateInfo,
     TemplateNetwork,
-    TemplateRepo,
     TemplateSandbox,
     TemplateSsh,
     TemplateStart,
@@ -819,17 +818,6 @@ class Template:
         start = build(TemplateStart, self._http.run(_core.one(Call("PUT", f"{self._path}/start", body=body, replay=True))))
         self.info.start = start
         return start
-
-    def repo(self) -> TemplateRepo | None:
-        """The repository it links to, for reference. Nothing is cloned."""
-        body = self._http.run(_core.one(Call("GET", f"{self._path}/repo", replay=True)))
-        return None if body is None else build(TemplateRepo, body)
-
-    def set_repo(self, name: str, url: str) -> TemplateRepo:
-        return build(TemplateRepo, self._http.run(_core.one(Call("PUT", f"{self._path}/repo", body={"name": name, "url": url}, replay=True))))
-
-    def remove_repo(self) -> None:
-        self._http.run(_core.one(Call("DELETE", f"{self._path}/repo", replay=True)))
 
     def ssh(self) -> TemplateSsh:
         """What a sandbox made from it is given for SSH as it is made: whether SSH is turned on, and the keys let in."""
