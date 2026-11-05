@@ -716,7 +716,7 @@ def burst(**changes: Any) -> dict[str, Any]:
         "halfLifeMinutes": 15,
         "feeMicrosPerGib": 20000,
         "mayStart": True,
-        "freeMonth": False,
+        "unpaid": False,
         "spentMicros": 0,
         "budgetMicros": 50_000_000,
         "budgetSet": False,
@@ -798,7 +798,7 @@ def test_asked_to_a_start_refused_for_its_burst_waits_until_it_would_cost_nothin
         answer(201, sandbox(), **{"Agental-Burst-Fee": "0"}),
         burst_refusal("burst_budget_reached", 64_000, 60),
         answer(201, sandbox(id="sbx_fork000000000000")),
-        burst_refusal("burst_in_free_month", 8000, 5),
+        burst_refusal("burst_fee_too_high", 8000, 5),
         answer(200, sandbox()),
     )
     made = agental.sandboxes.create(max_burst_fee_micros=0, max_burst_wait=60, idempotency_key="task-0002")
@@ -1100,7 +1100,7 @@ def test_billing_is_read_and_a_top_up_or_a_plan_is_bought_by_the_checkout_call_w
         "status": "active",
         "plan": {"id": "plan500", "dollarsPerMonth": 500, "includedMicros": 500_000_000, "sandboxesAtOnce": 1000, "sizes": ["tiny", "small", "medium", "large"], "burst": {"tier": 2, "perQuarterMb": 65536, "perHourMb": 196608}},
         "period": {"start": "2026-10-01T00:00:00.000Z", "end": "2026-11-01T00:00:00.000Z"},
-        "freeMonth": None,
+        "free": None,
         "includedMicros": 500_000_000,
         "usedMicros": 2_000_000_000,
         "discount": {"micros": 15_000_000, "percent": 1.5, "next": {"fromMicros": 5_000_000_000, "percent": 3}},
@@ -1108,7 +1108,6 @@ def test_billing_is_read_and_a_top_up_or_a_plan_is_bought_by_the_checkout_call_w
         "topUpMicros": 215_000_000,
         "sandboxesAtOnce": 1000,
         "cancelAtPeriodEnd": False,
-        "hadFreeMonth": True,
         "canRun": True,
         "reason": None,
     }
@@ -1118,13 +1117,16 @@ def test_billing_is_read_and_a_top_up_or_a_plan_is_bought_by_the_checkout_call_w
         "label": "list price",
         "note": "These are list prices per hour.",
         "plans": [{"size": "small", "vcpu": 2, "memoryMb": 4096, "diskGb": 40, "listPriceMicrosPerHour": 18000, "currency": "usd", "label": "list price"}],
-        "tiers": [{"id": "plan20", "dollarsPerMonth": 20, "includedMicros": 20_000_000, "sandboxesAtOnce": 100, "sizes": ["tiny", "small"], "burst": {"tier": 0, "perQuarterMb": 16384, "perHourMb": 49152}}],
+        "tiers": [
+            {"id": "free", "dollarsPerMonth": 0, "includedMicros": 0, "runningUnits": 20, "freeBurstUnits": 20, "sizes": ["tiny", "small"]},
+            {"id": "plan100", "dollarsPerMonth": 100, "includedMicros": 100_000_000, "sandboxesAtOnce": 100, "sizes": ["tiny", "small", "medium"], "burst": {"tier": 1, "perQuarterMb": 16384, "perHourMb": 49152}},
+        ],
         # One as an API older than the bonus sends it, and one with it.
         "topUps": [{"id": "topup50", "dollars": 50, "micros": 50_000_000}, {"id": "topup500", "dollars": 500, "micros": 537_000_000, "bonusMicros": 37_000_000, "bonusPercent": 7.4}],
         "topUpRange": {"minDollars": 15, "maxDollars": 100_000},
         "topUpBonus": {"fromDollars": 200, "fromPercent": 2, "toDollars": 10_000, "toPercent": 25},
         "volumeDiscount": [{"fromMicros": 0, "percent": 0}, {"fromMicros": 1_000_000_000, "percent": 1.5}],
-        "freeMonth": {"days": 30, "planId": "plan20"},
+        "free": {"planId": "free", "creditMicros": 10_000_000, "unpaidUnits": 2},
     }
     agental, script = scripted(
         answer(200, prices),
@@ -1140,14 +1142,15 @@ def test_billing_is_read_and_a_top_up_or_a_plan_is_bought_by_the_checkout_call_w
     assert (listed.top_ups[0].bonus_micros, listed.top_ups[1].micros, listed.top_ups[1].bonus_micros, listed.top_ups[1].bonus_percent) == (None, 537_000_000, 37_000_000, 7.4)
     assert listed.top_up_range is not None and (listed.top_up_range.min_dollars, listed.top_up_range.max_dollars) == (15, 100_000)
     assert listed.top_up_bonus is not None and (listed.top_up_bonus.from_dollars, listed.top_up_bonus.to_percent) == (200, 25)
-    assert (listed.plans[0].list_price_micros_per_hour, listed.free_month.plan_id) == (18000, "plan20")
-    assert listed.tiers[0].sizes == ["tiny", "small"]
-    assert not hasattr(listed.tiers[0], "burst") and not hasattr(listed.tiers[0], "sandboxes_at_once")
+    assert (listed.plans[0].list_price_micros_per_hour, listed.free.plan_id, listed.free.credit_micros, listed.free.unpaid_units) == (18000, "free", 10_000_000, 2)
+    assert (listed.tiers[0].id, listed.tiers[0].dollars_per_month, listed.tiers[0].sizes) == ("free", 0, ["tiny", "small"])
+    assert not hasattr(listed.tiers[1], "burst") and not hasattr(listed.tiers[1], "sandboxes_at_once")
     assert (script.sent[0].method, script.sent[0].url.path) == ("GET", "/v1/billing/plans")
     read = agental.billing()
     assert read.plan is not None and read.plan.included_micros == 500_000_000
     assert read.top_up_micros == 215_000_000 and not hasattr(read, "discount")
     assert read.auto_reload is not None and (read.auto_reload.dollars, read.can_auto_reload) == (50, True)
+    assert read.free is None
     assert (script.sent[1].method, script.sent[1].url.path) == ("GET", "/v1/billing")
 
     bought = agental.checkout(top_up=777)
@@ -1161,7 +1164,49 @@ def test_billing_is_read_and_a_top_up_or_a_plan_is_bought_by_the_checkout_call_w
     assert script.body(4) == {"plan": "plan100"}
     with pytest.raises(ValueError):
         agental.checkout(plan="plan100", top_up=50)
+    with pytest.raises(ValueError):
+        agental.checkout(top_up=50, card=True)
+    with pytest.raises(ValueError):
+        agental.checkout()
     assert len(script.sent) == 5
+
+
+def test_on_the_free_plan_billing_says_whether_a_card_is_saved_and_checkout_saves_one() -> None:
+    standing = {
+        "provider": "stripe",
+        "testMode": True,
+        "enforced": True,
+        "needsPlan": True,
+        "autoReload": None,
+        "canAutoReload": False,
+        "status": "none",
+        "plan": {"id": "free", "dollarsPerMonth": 0, "includedMicros": 0, "runningUnits": 20, "freeBurstUnits": 20, "sizes": ["tiny", "small"]},
+        "period": {"start": "2026-11-01T00:00:00.000Z", "end": "2026-12-01T00:00:00.000Z"},
+        "free": {"cardSaved": False, "paid": False, "unpaidUnits": 2},
+        "includedMicros": 0,
+        "usedMicros": 0,
+        "mailMicros": 0,
+        "topUpMicros": 0,
+        "cancelAtPeriodEnd": False,
+        "canRun": False,
+        "reason": "billing_required",
+        "lapse": None,
+    }
+    agental, script = scripted(
+        answer(200, standing),
+        answer(200, {"url": "https://pay.example/card", "changed": False}),
+        answer(409, {"error": {"code": "card_saved", "message": "This account has a card saved already. Change it in the billing portal."}}),
+    )
+    read = agental.billing()
+    assert read.plan is not None and read.plan.id == "free"
+    assert read.free is not None and (read.free.card_saved, read.free.paid, read.free.unpaid_units) == (False, False, 2)
+    assert (read.needs_plan, read.can_run, read.reason) == (True, False, "billing_required")
+    saved = agental.checkout(card=True)
+    assert (saved.url, saved.changed) == ("https://pay.example/card", False)
+    assert script.body(1) == {"card": True}
+    with pytest.raises(ApiError) as refused:
+        agental.checkout(card=True)
+    assert (refused.value.status, refused.value.code) == (409, "card_saved")
 
 
 def test_the_auto_reload_is_set_and_turned_off_by_one_call_which_sends_the_dollars_or_none() -> None:

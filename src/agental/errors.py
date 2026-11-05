@@ -44,8 +44,7 @@ class ApiError(AgentalError):
 #: running_limit_reached: the account already runs as many sandboxes as its plan's running_units allows.
 #: burst_fee_too_high: the start would cost more in burst fees than max_burst_fee_micros allows.
 #: burst_budget_reached: the fee would take this month's burst fees past the account's budget.
-#: burst_in_free_month: the start would cost a fee, which the free month does not pay.
-BURST_REFUSALS = frozenset({"running_limit_reached", "burst_fee_too_high", "burst_budget_reached", "burst_in_free_month"})
+BURST_REFUSALS = frozenset({"running_limit_reached", "burst_fee_too_high", "burst_budget_reached"})
 
 
 class ProxyError(AgentalError):

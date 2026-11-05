@@ -206,7 +206,7 @@ def answered(call: Call) -> Steps:
 
 
 #: The burst refusals a wait may help: the start costs nothing once the meter has fallen.
-WAITABLE_BURST = frozenset({"burst_fee_too_high", "burst_budget_reached", "burst_in_free_month"})
+WAITABLE_BURST = frozenset({"burst_fee_too_high", "burst_budget_reached"})
 
 
 def burst_headers(max_fee_micros: int | None) -> dict[str, str]:

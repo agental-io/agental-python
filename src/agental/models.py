@@ -1081,9 +1081,9 @@ class Burst:
     #: Whether the account is held to its plan: a start past the running count is refused, and a fast one costs a
     #: fee. False: what it starts is only measured.
     enforced: bool
-    #: The plan it is on, in its free month or not, or None.
+    #: The plan it is on, "free" included, or None where plans are not enforced on it.
     plan: str | None
-    #: Whose limits it has: its plan's, a plan's we gave it ("hand"), or, on no plan, the smallest plan's ("none").
+    #: Whose limits it has: its plan's, a plan's we gave it ("hand"), or, where plans are not enforced on it, the free plan's ("none").
     limits_from: Literal["plan", "hand", "none"]
     #: The plan whose limits it has.
     limits_plan: str
@@ -1108,8 +1108,9 @@ class Burst:
     fee_micros_per_gib: int
     #: Whether it may start a sandbox at all now. A plan out of credit may not: billing() says why.
     may_start: bool
-    #: Whether its plan is in its free month, which pays no burst fees: a start that would cost one is refused.
-    free_month: bool
+    #: Whether it is on the free plan and has paid for nothing yet: until it has, it runs and starts at most
+    #: Prices.free.unpaid_units small sandboxes at once.
+    unpaid: bool
     #: What it has spent on burst fees this month.
     spent_micros: int
     #: The most it spends on burst fees in a month. A start that would go past it is refused with burst_budget_reached.
@@ -1464,7 +1465,10 @@ class SizePrice:
 
 @dataclass
 class Plan:
-    """A monthly plan: what it costs, the credits it includes, which sizes it makes, how many it runs at once and how fast it starts them.
+    """A plan: what it costs a month, the credits it includes, which sizes it makes, how many it runs at once and how fast it starts them.
+
+    The first, "free", costs nothing and includes nothing: what it runs is paid from credits, its
+    one credit for a card saved and top-ups. See Prices.free.
 
     Counts are in small sandboxes: a tiny counts half, a medium 2, a large 4. A create, fork or
     start past running_units raises an ApiError 429 running_limit_reached. Starting faster than
@@ -1488,8 +1492,7 @@ class Plan:
 class BurstFee:
     """What a start costs when an account starts sandboxes faster than its plan's free burst.
 
-    Fees come out of the plan's credits and then the top-ups. The free month pays none: such a
-    start is refused.
+    Fees come out of the plan's credits and then the top-ups.
     """
 
     #: How long an account's burst meter takes to fall by half. Each start adds its memory to it.
@@ -1503,7 +1506,7 @@ class BurstFee:
 
 @dataclass
 class TopUp:
-    """Credits bought once, on top of a plan. From $200 it adds a bonus. It does not expire."""
+    """Credits bought once, on any plan, the free one included. From $200 it adds a bonus. It does not expire."""
 
     id: str
     #: What it costs, in whole US dollars.
@@ -1535,15 +1538,20 @@ class TopUpBonus:
 
 
 @dataclass
-class FreeMonth:
-    """A new account's first month on the $20 plan is free. The card is taken first, and the plan is charged when the days end."""
+class FreePlan:
+    """The free plan: nothing a month, and what it runs is paid from credits.
 
-    days: int
-    #: The plan whose first days are free: its credits and its sizes.
+    It needs a card saved, charged nothing: checkout(card=True). Once it is, the account is given
+    credit_micros, once an account and once a card, which does not expire.
+    """
+
+    #: The free plan's id among the tiers: "free".
     plan_id: str
-    #: Small sandboxes the free month runs and starts at once, at most, in place of the plan's larger counts. A
-    #: tiny counts half. None from an API older than this count.
-    running_units: int | None = None
+    #: The credit given once for a card saved, in millionths of a US dollar.
+    credit_micros: int
+    #: Small sandboxes it runs and starts at once, at most, until the account has paid for something, a top-up
+    #: of any size; then the plan's running_units. A tiny counts half.
+    unpaid_units: int
 
 
 @dataclass
@@ -1562,7 +1570,7 @@ class StoragePrices:
 
 @dataclass
 class Prices:
-    """What is sold: the hourly price of each size (plans), the monthly plans (tiers), the top-ups and their bonus, and the free month."""
+    """What is sold: the hourly price of each size (plans), the plans (tiers), the top-ups and their bonus, and the free plan's terms."""
 
     currency: str
     interval: str
@@ -1570,11 +1578,12 @@ class Prices:
     note: str
     #: Each size and what an hour of it costs. Not the monthly plans, despite the name, which the API gives it: those are tiers.
     plans: list[SizePrice]
-    #: The monthly plans, smallest first: what each costs, its sizes, and how many it runs and starts at once.
+    #: The plans, the free one first: what each costs, its sizes, and how many it runs and starts at once.
     tiers: list[Plan]
     #: The top-ups offered as a choice. Any other whole number of dollars in top_up_range may be bought too.
     top_ups: list[TopUp]
-    free_month: FreeMonth
+    #: The free plan's credit and what it runs at once before the account has paid.
+    free: FreePlan
     #: What stopped sandboxes and snapshots cost. None from an API older than it.
     storage: StoragePrices | None = None
     #: None from an API older than the bonus.
@@ -1592,21 +1601,25 @@ class BillingPeriod:
 
 
 @dataclass
-class BillingFreeMonth:
-    """The plan's free first month. It is the whole plan."""
+class BillingFree:
+    """Where an account on the free plan stands."""
 
-    #: When the free days end and the plan is first charged.
-    ends_at: str | None
+    #: Whether it has a card saved, which it must before it runs anything, and so has had its credit.
+    card_saved: bool
+    #: Whether it has paid for anything. Until it has, it runs and starts at most unpaid_units small sandboxes at once.
+    paid: bool
+    unpaid_units: int
 
 
 @dataclass
 class BillingLapse:
-    """An account with no plan, or one that owes, that still holds sandboxes or snapshots."""
+    """An account that may not run a sandbox and still holds stopped sandboxes or snapshots."""
 
     lapsed_at: str
-    #: When its sandboxes and snapshots are deleted, unless a plan is started, or what is owed paid, first.
+    #: When its sandboxes and snapshots are deleted, unless a card is saved, credits bought, or what is owed paid, first.
     deletes_at: str
-    #: no_plan: the account has no plan. unpaid: it owes for what it used past its plan and its top-ups.
+    #: no_plan: it is on the free plan with no card saved. out_of_credit: it is on the free plan and its credits
+    #: are used. unpaid: it has a plan bought by the month and owes for what it used past the plan and its top-ups.
     reason: str = "no_plan"
 
 
@@ -1617,28 +1630,30 @@ class Billing:
     provider: str
     #: True while the payment provider is in its test mode: nothing is really charged.
     test_mode: bool
-    #: Whether a plan is needed to run a sandbox.
+    #: Whether plans are enforced: a card saved, or a plan, is needed to run a sandbox.
     enforced: bool
-    #: trialing is the plan's free first month, as the payment provider names it. active is a paid month.
+    #: The subscription to a plan bought by the month, as the payment provider names it. none or canceled: the
+    #: account is on the free plan.
     status: str
+    #: The plan it is on: one bought by the month while it is live, else the free plan. None only where plans are not enforced.
     plan: Plan | None
+    #: The month it is in. On the free plan, from where its use was last settled to the next month's start, in UTC.
     period: BillingPeriod | None
-    #: Set while the plan is in its free first month, else None.
-    free_month: BillingFreeMonth | None
+    #: Set while the account is on the free plan, else None.
+    free: BillingFree | None
     included_micros: int
     #: What has been used this month at list price: running time, mail, stopped sandboxes and snapshots past the free ones.
     used_micros: int
     #: The part of used_micros that is mail.
     mail_micros: int
-    #: What is left of the credits bought on top of the plan. It is used after the month's credits, and it does not expire.
+    #: What is left of the credits bought on top of the plan, and of the free plan's credit. It is used after the
+    #: month's credits, and it does not expire.
     top_up_micros: int
     cancel_at_period_end: bool
-    #: Whether the account has had its free month.
-    had_free_month: bool
     can_run: bool
     #: billing_required or out_of_credit when the account may not run a sandbox, else None.
     reason: str | None
-    #: Set while the account has no plan and still holds sandboxes or snapshots, else None.
+    #: Set while the account may not run a sandbox and still holds sandboxes or snapshots, else None.
     lapse: BillingLapse | None = None
     #: The part of used_micros that is stopped sandboxes.
     stopped_micros: int = 0
@@ -1646,13 +1661,14 @@ class Billing:
     snapshot_micros: int = 0
     #: What an earlier month ran past its plan and top-ups, taken from this month's credits first.
     carried_micros: int = 0
-    #: True while the account must start a plan before it uses agental: plans are enforced and it has none, or the one it had has ended.
+    #: True while the account must save a card, or buy a plan, before it uses agental: plans are enforced and it is
+    #: on the free plan with no card saved.
     needs_plan: bool = False
     #: The part of used_micros that is burst fees: what starts faster than the plan's free burst cost. burst() says where the account stands.
     burst_micros: int = 0
     #: The auto-reload: the top-up the saved card is charged for when the credits run out, with its credits added before any sandbox is stopped. None while it is off.
     auto_reload: AutoReloadSetting | None = None
-    #: Whether an auto-reload can be set: Stripe sells here, and the account has bought a plan or a top-up there, which saved its card.
+    #: Whether an auto-reload can be set: Stripe sells here, and the account has saved a card there.
     can_auto_reload: bool = False
 
 

@@ -1289,9 +1289,8 @@ class Sandboxes:
         0 refuses any fee. Left out, it pays what the account's monthly burst budget allows.
         One that would cost more raises ApiError burst_fee_too_high, whose fee_micros says what
         it would cost and retry_after_seconds when it would cost nothing. With max_burst_wait,
-        in seconds, a create refused with burst_fee_too_high, burst_budget_reached or
-        burst_in_free_month waits retry_after_seconds when that is no longer, and is tried once
-        more; it never waits for running_limit_reached. The sandbox's burst_fee_micros says
+        in seconds, a create refused with burst_fee_too_high or burst_budget_reached waits
+        retry_after_seconds when that is no longer, and is tried once more; it never waits for running_limit_reached. The sandbox's burst_fee_micros says
         what it paid.
         """
         body: dict[str, Any] = {"name": name or _core.made("sbx")}
@@ -1562,28 +1561,34 @@ class Agental:
         return build(Policy, self._http.run(_core.one(Call("GET", "/v1/policy", replay=True))))
 
     def prices(self) -> Prices:
-        """What is sold: the list price an hour of each size, the monthly plans, the top-ups and their bonus, and the free month."""
+        """What is sold: the list price an hour of each size, the plans, the top-ups and their bonus, and the free plan's terms."""
         return build(Prices, self._http.run(_core.one(Call("GET", "/v1/billing/plans", replay=True))))
 
     def billing(self) -> Billing:
         """Where the account stands, in millionths of a US dollar.
 
-        Its plan, in its free month or not, what it has used this month at list price, what is
-        left of its top-ups, and whether it may run a sandbox.
+        Its plan, the free one included, what it has used this month at list price, what is
+        left of its credits, and whether it may run a sandbox.
         """
         return build(Billing, self._http.run(_core.one(Call("GET", "/v1/billing", replay=True))))
 
-    def checkout(self, *, plan: Literal["plan20", "plan100", "plan500", "plan2000"] | None = None, top_up: int | None = None) -> Checkout:
-        """Starts a purchase and gives the address of the payment page, for a person to open.
+    def checkout(
+        self, *, plan: Literal["plan100", "plan500", "plan2000"] | None = None, top_up: int | None = None, card: bool = False
+    ) -> Checkout:
+        """Starts a purchase, or a card saved, and gives the address of the page, for a person to open.
 
-        Give plan, or top_up: any whole number of US dollars from 15 to 100,000 of credits
-        that does not expire. From $200 it adds a bonus, 2% there and growing to 25% at
-        $10,000: $500 adds $537. prices() says what each adds. An account that already has a plan and asks for another is moved to it at
-        once: url is None and changed is True. Nothing is charged until the person pays.
+        Give one of plan; top_up, any whole number of US dollars from 15 to 100,000 of credits
+        that does not expire; or card=True, which saves a card for the free plan and charges
+        nothing. Once the card is saved, the account is given the free plan's credit, once, and
+        may run sandboxes; an account with a card saved already raises ApiError 409 card_saved.
+        From $200 a top-up adds a bonus, 2% there and growing to 25% at $10,000: $500 adds
+        $537. prices() says what each adds. An account that already has a plan and asks for
+        another is moved to it at once: url is None and changed is True. Nothing is charged
+        until the person pays. To go back to the free plan, cancel the plan in the billing portal.
         """
-        if (plan is None) == (top_up is None):
-            raise ValueError("checkout takes plan or top_up, and not both.")
-        body: dict[str, Any] = {"plan": plan} if plan is not None else {"topUp": top_up}
+        if sum((plan is not None, top_up is not None, card)) != 1:
+            raise ValueError("checkout takes one of plan, top_up or card=True.")
+        body: dict[str, Any] = {"plan": plan} if plan is not None else {"topUp": top_up} if top_up is not None else {"card": True}
         return build(Checkout, self._http.run(_core.one(Call("POST", "/v1/billing/checkout", body=body))))
 
     def set_auto_reload(self, dollars: int | None) -> AutoReload:
@@ -1592,8 +1597,8 @@ class Agental:
         When the month's credits and the top-ups run out, the card saved at the last purchase
         is charged for a top-up of this many US dollars, with tax, and its credits are added
         at once, before any sandbox is stopped. At most three times a day, and not again for
-        a day after a card that would not pay. It needs a plan or a top-up bought first, which
-        saves the card: billing().can_auto_reload says whether it can be set.
+        a day after a card that would not pay. It needs a card saved first, by checkout():
+        billing().can_auto_reload says whether it can be set.
         """
         return build(AutoReload, self._http.run(_core.one(Call("PUT", "/v1/billing/auto-reload", body={"dollars": dollars}))))
 
@@ -1612,8 +1617,8 @@ class Agental:
 
         Where enforced is True, a create, fork or start past the running count raises an
         ApiError 429 running_limit_reached; one faster than the free burst costs a burst fee,
-        and is refused with burst_budget_reached past the monthly budget or
-        burst_in_free_month in the free month.
+        and is refused with burst_budget_reached past the monthly budget. On the free plan,
+        until the account has paid for something, the running count is Prices.free.unpaid_units.
         """
         query = {"size": size, "count": None if count is None else str(count)}
         return build(Burst, self._http.run(_core.one(Call("GET", "/v1/burst", query=query, replay=True))))
