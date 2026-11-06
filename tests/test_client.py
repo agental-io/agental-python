@@ -2106,3 +2106,25 @@ def test_a_schedule_that_runs_once_is_asked_to_delete_its_sandbox_after_and_its_
     assert made.delete_after is True
     assert script.body(1) == {"command": "./finish.sh", "at": "2026-11-04T09:00:00Z", "deleteAfter": True}
     assert box.schedules.runs("sch_1")[0].deleted_sandbox is True
+
+
+def test_a_list_follows_every_page_and_a_page_is_read_alone_with_its_filter_sort_and_cursor() -> None:
+    agental, script = scripted(
+        answer(200, {"sandboxes": [sandbox(name="a")], "nextCursor": "c1"}),
+        answer(200, {"sandboxes": [sandbox(name="b")], "nextCursor": None}),
+        answer(200, {"sandboxes": [sandbox(name="b")], "nextCursor": "c2"}),
+        # An API from before pages answers every sandbox and no nextCursor: the list ends there.
+        answer(200, {"sandboxes": [sandbox(name="a"), sandbox(name="b")]}),
+    )
+    found = agental.sandboxes.list(status=["running", "stopped"], archived=False, not_metadata={"repo": "*"})
+    assert [each.name for each in found] == ["a", "b"]
+    first, second = script.sent[0].url.params, script.sent[1].url.params
+    assert (first.get_list("status"), first.get("archived"), first.get("notMetadata[repo]"), first.get("limit"), first.get("cursor")) == (["running", "stopped"], "false", "*", "200", None)
+    assert second.get("cursor") == "c1"
+
+    page = agental.sandboxes.page(text="b", created_after=datetime(2026, 11, 6, tzinfo=timezone.utc), sort="-created", limit=1)
+    assert ([each.name for each in page.sandboxes], page.next_cursor) == (["b"], "c2")
+    params = script.sent[2].url.params
+    assert (params.get("q"), params.get("createdAfter"), params.get("sort"), params.get("limit")) == ("b", "2026-11-06T00:00:00+00:00", "-created", "1")
+
+    assert len(agental.sandboxes.list()) == 2

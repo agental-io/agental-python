@@ -1331,19 +1331,130 @@ class Sandboxes:
         """
         return Email(self._http, f"/v1/sandboxes/{quote(sandbox_id, safe='')}/email")
 
-    def list(self, *, tag: str | Sequence[str] | None = None, metadata: Mapping[str, str] | None = None) -> list[Sandbox]:
-        """Your sandboxes, stopped ones included.
+    def list(
+        self,
+        *,
+        tag: str | Sequence[str] | None = None,
+        not_tag: str | Sequence[str] | None = None,
+        status: str | Sequence[str] | None = None,
+        archived: bool | None = None,
+        size: str | Sequence[str] | None = None,
+        region: str | Sequence[str] | None = None,
+        template_id: str | Sequence[str] | None = None,
+        created_by: str | Sequence[str] | None = None,
+        created_after: str | datetime | None = None,
+        created_before: str | datetime | None = None,
+        stopped_before: str | datetime | None = None,
+        stops_before: str | datetime | None = None,
+        stops: Literal["never"] | None = None,
+        memory_kept: bool | None = None,
+        outbound: str | Sequence[str] | None = None,
+        metadata: Mapping[str, str] | None = None,
+        not_metadata: Mapping[str, str] | None = None,
+        text: str | None = None,
+    ) -> list[Sandbox]:
+        """Every sandbox of yours that matches, stopped ones included, oldest first.
 
-        Given a tag, or several, only those with every one of them; given metadata, only those
-        with each key at that value. A template's tags and metadata count.
+        With nothing given, every sandbox. It reads a page of 200 at a time and follows them to
+        the end. Each argument narrows; a list of values is any of them. Tags and metadata are
+        judged as the sandbox shows them: its template's count, and its own value for a key wins.
+        A metadata value of "*" is any value, the key being set; in not_metadata, the key not set.
+        status is creating, running, stopped, error, restoring or migrating; outbound is open,
+        blocked or allowlist; stops="never" is no auto-stop time; text is found in the name or id.
         """
-        query: dict[str, str | list[str] | None] = {}
-        if tag is not None:
-            query["tag"] = tag if isinstance(tag, str) else list(tag)
+        found: builtins.list[Sandbox] = []
+        cursor: str | None = None
+        while True:
+            page = self.page(
+                tag=tag, not_tag=not_tag, status=status, archived=archived, size=size, region=region, template_id=template_id,
+                created_by=created_by, created_after=created_after, created_before=created_before, stopped_before=stopped_before,
+                stops_before=stops_before, stops=stops, memory_kept=memory_kept, outbound=outbound, metadata=metadata,
+                not_metadata=not_metadata, text=text, limit=200, cursor=cursor,
+            )
+            found.extend(page.sandboxes)
+            if page.next_cursor is None:
+                return found
+            cursor = page.next_cursor
+
+    def page(
+        self,
+        *,
+        tag: str | Sequence[str] | None = None,
+        not_tag: str | Sequence[str] | None = None,
+        status: str | Sequence[str] | None = None,
+        archived: bool | None = None,
+        size: str | Sequence[str] | None = None,
+        region: str | Sequence[str] | None = None,
+        template_id: str | Sequence[str] | None = None,
+        created_by: str | Sequence[str] | None = None,
+        created_after: str | datetime | None = None,
+        created_before: str | datetime | None = None,
+        stopped_before: str | datetime | None = None,
+        stops_before: str | datetime | None = None,
+        stops: Literal["never"] | None = None,
+        memory_kept: bool | None = None,
+        outbound: str | Sequence[str] | None = None,
+        metadata: Mapping[str, str] | None = None,
+        not_metadata: Mapping[str, str] | None = None,
+        text: str | None = None,
+        sort: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> SandboxPage:
+        """One page of the sandboxes that match, as list() narrows them: up to limit of them (1 to 200).
+
+        Pass its next_cursor as cursor, with the same sort, for the page after it. sort is created
+        (the default), -created, name, -name, status, -status, stopped or -stopped. Sorted by anything
+        but created, a sandbox that changes while the pages are read can be missed or met twice.
+        """
+        query: dict[str, str | builtins.list[str] | None] = {}
+
+        def many(name: str, value: str | Sequence[str] | None) -> None:
+            if value is not None:
+                query[name] = value if isinstance(value, str) else builtins.list(value)
+
+        def time(value: str | datetime | None) -> str | None:
+            return value.isoformat() if isinstance(value, datetime) else value
+
+        many("tag", tag)
+        many("notTag", not_tag)
+        many("status", status)
+        many("size", size)
+        many("region", region)
+        many("templateId", template_id)
+        many("createdBy", created_by)
+        many("outbound", outbound)
+        many("createdAfter", time(created_after))
+        many("createdBefore", time(created_before))
+        many("stoppedBefore", time(stopped_before))
+        many("stopsBefore", time(stops_before))
+        many("stops", stops)
+        many("q", text)
+        if archived is not None:
+            query["archived"] = "true" if archived else "false"
+        if memory_kept is not None:
+            query["memoryKept"] = "true" if memory_kept else "false"
         for key, value in (metadata or {}).items():
             query[f"metadata[{key}]"] = value
+        for key, value in (not_metadata or {}).items():
+            query[f"notMetadata[{key}]"] = value
+        many("sort", sort)
+        many("limit", None if limit is None else str(limit))
+        many("cursor", cursor)
         body = self._http.run(_core.one(Call("GET", "/v1/sandboxes", query=query, replay=True)))
-        return [Sandbox(self._http, each) for each in body["sandboxes"]]
+        # An API from before pages answers every sandbox at once, and no nextCursor.
+        return SandboxPage([Sandbox(self._http, each) for each in body["sandboxes"]], body.get("nextCursor"))
+
+
+class SandboxPage:
+    """A page of sandboxes, and what to pass as cursor for the next one: None when this is the last."""
+
+    def __init__(self, sandboxes: builtins.list[Sandbox], next_cursor: str | None) -> None:
+        self.sandboxes = sandboxes
+        self.next_cursor = next_cursor
+
+    def __repr__(self) -> str:
+        return f"SandboxPage(sandboxes={self.sandboxes!r}, next_cursor={self.next_cursor!r})"
 
 
 class Snapshots:
