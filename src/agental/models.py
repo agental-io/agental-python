@@ -152,6 +152,25 @@ class SandboxNetworkDetail:
 
 
 @dataclass
+class SandboxActivity:
+    """What a running sandbox is doing, as the service last read it, about once a minute."""
+
+    #: low-cpu (an hour under 5% CPU, observed: a heuristic, as an agent waiting on a model uses almost none),
+    #: disk-full, memory-full (90% or more), not-read (its server has not answered for 3 minutes).
+    states: list[str]
+    #: Its CPU now, and at its busiest in the last hour, 0 to 1 of its vCPUs.
+    cpu_now: float | None
+    cpu_max_last_hour: float | None
+    #: How many of the last hour's minutes were read, since its current run began on its current server.
+    observed_minutes: int
+    memory_used_bytes: int | None
+    memory_total_bytes: int | None
+    disk_used_bytes: int | None
+    disk_total_bytes: int | None
+    read_at: str
+
+
+@dataclass
 class SandboxInfo:
     """A sandbox as the API reports it."""
 
@@ -200,6 +219,8 @@ class SandboxInfo:
     memory_kept: bool | None = None
     #: Why the memory its last stop kept was not put back by its last start, which started it from its disk. None when it was, or none was kept.
     memory_lost: str | None = None
+    #: What it is doing, as last read: None when it is not running, not read yet, or metrics are not read here.
+    activity: SandboxActivity | None = None
 
 
 @dataclass
