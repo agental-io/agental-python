@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import builtins
+import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
 from types import TracebackType
@@ -1404,46 +1405,216 @@ class AsyncSandboxes:
         """One page of the sandboxes that match, as list() narrows them: up to limit of them (1 to 200).
 
         Pass its next_cursor as cursor, with the same sort, for the page after it. sort is created
-        (the default), -created, name, -name, status, -status, stopped or -stopped. Sorted by anything
+        (the default), -created, name, -name, status, -status, stopped, -stopped, cost or -cost. Sorted by anything
         but created, a sandbox that changes while the pages are read can be missed or met twice.
         """
-        query: dict[str, str | builtins.list[str] | None] = {}
+        query = _filter_query(
+            tag=tag, not_tag=not_tag, status=status, archived=archived, size=size, region=region, template_id=template_id,
+            created_by=created_by, created_after=created_after, created_before=created_before, stopped_before=stopped_before,
+            stops_before=stops_before, stops=stops, memory_kept=memory_kept, outbound=outbound, metadata=metadata,
+            not_metadata=not_metadata, text=text,
+        )
 
-        def many(name: str, value: str | Sequence[str] | None) -> None:
+        def many(name: str, value: str | None) -> None:
             if value is not None:
-                query[name] = value if isinstance(value, str) else builtins.list(value)
+                query[name] = value
 
-        def time(value: str | datetime | None) -> str | None:
-            return value.isoformat() if isinstance(value, datetime) else value
-
-        many("tag", tag)
-        many("notTag", not_tag)
-        many("status", status)
-        many("size", size)
-        many("region", region)
-        many("templateId", template_id)
-        many("createdBy", created_by)
-        many("outbound", outbound)
-        many("createdAfter", time(created_after))
-        many("createdBefore", time(created_before))
-        many("stoppedBefore", time(stopped_before))
-        many("stopsBefore", time(stops_before))
-        many("stops", stops)
-        many("q", text)
-        if archived is not None:
-            query["archived"] = "true" if archived else "false"
-        if memory_kept is not None:
-            query["memoryKept"] = "true" if memory_kept else "false"
-        for key, value in (metadata or {}).items():
-            query[f"metadata[{key}]"] = value
-        for key, value in (not_metadata or {}).items():
-            query[f"notMetadata[{key}]"] = value
         many("sort", sort)
         many("limit", None if limit is None else str(limit))
         many("cursor", cursor)
         body = await self._http.run(_core.one(Call("GET", "/v1/sandboxes", query=query, replay=True)))
         # An API from before pages answers every sandbox at once, and no nextCursor.
         return AsyncSandboxPage([AsyncSandbox(self._http, each) for each in body["sandboxes"]], body.get("nextCursor"))
+
+
+    async def summary(
+        self,
+        *,
+        facets: str | Sequence[str] | None = None,
+        tag: str | Sequence[str] | None = None,
+        not_tag: str | Sequence[str] | None = None,
+        status: str | Sequence[str] | None = None,
+        archived: bool | None = None,
+        size: str | Sequence[str] | None = None,
+        region: str | Sequence[str] | None = None,
+        template_id: str | Sequence[str] | None = None,
+        created_by: str | Sequence[str] | None = None,
+        created_after: str | datetime | None = None,
+        created_before: str | datetime | None = None,
+        stopped_before: str | datetime | None = None,
+        stops_before: str | datetime | None = None,
+        stops: Literal["never"] | None = None,
+        memory_kept: bool | None = None,
+        outbound: str | Sequence[str] | None = None,
+        metadata: Mapping[str, str] | None = None,
+        not_metadata: Mapping[str, str] | None = None,
+        text: str | None = None,
+    ) -> dict[str, Any]:
+        """How many sandboxes match, as list() narrows them, and what they cost.
+
+        It answers the API's summary as it says it: total and byState, each with count,
+        microsPerHour (what they are charged an hour now) and spentMicros (since midnight UTC
+        today), ifStopped (what the running among them would cost stopped), and for each field in
+        facets (status, size, region, templateId, tag, outbound, metadataKeys, metadata.<key>) the
+        count and hourly cost of each value. Money is in millionths of a US dollar. Spent is for the
+        sandboxes found, not the account.
+        """
+        query = _filter_query(
+            tag=tag, not_tag=not_tag, status=status, archived=archived, size=size, region=region, template_id=template_id,
+            created_by=created_by, created_after=created_after, created_before=created_before, stopped_before=stopped_before,
+            stops_before=stops_before, stops=stops, memory_kept=memory_kept, outbound=outbound, metadata=metadata,
+            not_metadata=not_metadata, text=text,
+        )
+        if facets:
+            query["facets"] = facets if isinstance(facets, str) else ",".join(facets)
+        body: dict[str, Any] = await self._http.run(_core.one(Call("GET", "/v1/sandbox-summary", query=query, replay=True)))
+        return body
+
+
+def _filter_query(
+    *,
+    tag: str | Sequence[str] | None,
+    not_tag: str | Sequence[str] | None,
+    status: str | Sequence[str] | None,
+    archived: bool | None,
+    size: str | Sequence[str] | None,
+    region: str | Sequence[str] | None,
+    template_id: str | Sequence[str] | None,
+    created_by: str | Sequence[str] | None,
+    created_after: str | datetime | None,
+    created_before: str | datetime | None,
+    stopped_before: str | datetime | None,
+    stops_before: str | datetime | None,
+    stops: str | None,
+    memory_kept: bool | None,
+    outbound: str | Sequence[str] | None,
+    metadata: Mapping[str, str] | None,
+    not_metadata: Mapping[str, str] | None,
+    text: str | None,
+) -> dict[str, str | builtins.list[str] | None]:
+    """A filter as GET /v1/sandboxes and /v1/sandbox-summary take it."""
+    query: dict[str, str | builtins.list[str] | None] = {}
+
+    def many(name: str, value: str | Sequence[str] | None) -> None:
+        if value is not None:
+            query[name] = value if isinstance(value, str) else builtins.list(value)
+
+    def time(value: str | datetime | None) -> str | None:
+        return value.isoformat() if isinstance(value, datetime) else value
+
+    many("tag", tag)
+    many("notTag", not_tag)
+    many("status", status)
+    many("size", size)
+    many("region", region)
+    many("templateId", template_id)
+    many("createdBy", created_by)
+    many("outbound", outbound)
+    many("createdAfter", time(created_after))
+    many("createdBefore", time(created_before))
+    many("stoppedBefore", time(stopped_before))
+    many("stopsBefore", time(stops_before))
+    many("stops", stops)
+    many("q", text)
+    if archived is not None:
+        query["archived"] = "true" if archived else "false"
+    if memory_kept is not None:
+        query["memoryKept"] = "true" if memory_kept else "false"
+    for key, value in (metadata or {}).items():
+        query[f"metadata[{key}]"] = value
+    for key, value in (not_metadata or {}).items():
+        query[f"notMetadata[{key}]"] = value
+    return query
+
+
+class AsyncSandboxJobs:
+    """Jobs that act on many sandboxes at once.
+
+    A preview fixes the sandboxes a filter finds; a job acts on exactly those, checking each again
+    just before, and on no other. Answers are the API's, as dictionaries.
+    """
+
+    def __init__(self, http: _Http) -> None:
+        self._http = http
+
+    async def preview(
+        self,
+        action: str,
+        *,
+        filter: Mapping[str, Any] | None = None,
+        ids: Sequence[str] | None = None,
+        options: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """The sandboxes a job would act on, fixed: how many, the first of them, and the money before and after. Nothing is done.
+
+        filter takes list()'s arguments by name (status="running", tag="ci", metadata={...});
+        ids names the sandboxes outright. action is stop, start, archive, snapshot, auto-stop or labels.
+        """
+        if (filter is None) == (ids is None):
+            raise ValueError("preview takes filter or ids, one of them")
+        select: dict[str, Any] = {"ids": builtins.list(ids)} if ids is not None else {"filter": _filter_query(**_filter_defaults(filter or {}))}
+        body = {"action": action, "options": dict(options or {}), "select": select}
+        answer: dict[str, Any] = await self._http.run(_core.one(Call("POST", "/v1/sandbox-jobs/preview", body=body)))
+        return answer
+
+    async def create(
+        self,
+        *,
+        preview_id: str | None = None,
+        action: str | None = None,
+        ids: Sequence[str] | None = None,
+        options: Mapping[str, Any] | None = None,
+        idempotency_key: str | None = None,
+        confirm: int | None = None,
+    ) -> dict[str, Any]:
+        """Makes a job from a preview, or from sandbox IDs named outright. Sent again with the same idempotency_key, the same job is answered.
+
+        A delete is made with confirm, the count its preview showed; another count is refused and nothing is deleted.
+        """
+        body: dict[str, Any] = {"previewId": preview_id} if preview_id is not None else {"action": action, "ids": builtins.list(ids or []), "options": dict(options or {})}
+        if confirm is not None:
+            body["confirm"] = confirm
+        key = idempotency_key or f"sdk-{uuid.uuid4().hex[:12]}"
+        answer: dict[str, Any] = await self._http.run(_core.one(Call("POST", "/v1/sandbox-jobs", body=body, headers={"Idempotency-Key": key}, replay=True)))
+        return answer
+
+    async def get(self, job_id: str) -> dict[str, Any]:
+        answer: dict[str, Any] = await self._http.run(_core.one(Call("GET", f"/v1/sandbox-jobs/{quote(job_id, safe='')}", replay=True)))
+        return answer
+
+    async def list(self) -> builtins.list[dict[str, Any]]:
+        """The organization's last 50 jobs, the newest first."""
+        answer = await self._http.run(_core.one(Call("GET", "/v1/sandbox-jobs", replay=True)))
+        return builtins.list(answer["jobs"])
+
+    async def items(self, job_id: str, *, state: str | None = None, limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
+        """A page of a job's items, in order: each with its state, why, and what it made or follows."""
+        query = {"state": state, "limit": None if limit is None else str(limit), "cursor": cursor}
+        answer: dict[str, Any] = await self._http.run(_core.one(Call("GET", f"/v1/sandbox-jobs/{quote(job_id, safe='')}/items", query=query, replay=True)))
+        return answer
+
+    async def cancel(self, job_id: str) -> dict[str, Any]:
+        """No item that has not begun begins; those under way are followed to their end."""
+        answer: dict[str, Any] = await self._http.run(_core.one(Call("POST", f"/v1/sandbox-jobs/{quote(job_id, safe='')}/cancel", replay=True)))
+        return answer
+
+    async def wait(self, job_id: str) -> dict[str, Any]:
+        """Reads the job every poll_interval seconds until it has ended, and answers it ended."""
+        while True:
+            job = await self.get(job_id)
+            if job.get("state") != "running":
+                return job
+            await asyncio.sleep(self._http.config.poll_interval)
+
+
+def _filter_defaults(given: Mapping[str, Any]) -> dict[str, Any]:
+    """list()'s arguments by name, every one there, for _filter_query."""
+    names = ("tag", "not_tag", "status", "archived", "size", "region", "template_id", "created_by", "created_after", "created_before",
+             "stopped_before", "stops_before", "stops", "memory_kept", "outbound", "metadata", "not_metadata", "text")
+    unknown = set(given) - set(names)
+    if unknown:
+        raise ValueError(f"filter takes list()'s arguments; not {', '.join(sorted(unknown))}")
+    return {name: given.get(name) for name in names}
 
 
 class AsyncSandboxPage:
@@ -1644,6 +1815,8 @@ class AsyncAgental:
         self.api_keys = AsyncApiKeys(self._http)
         #: The organizations the key's person is in, and the members and invites of a team.
         self.organizations = AsyncOrganizations(self._http)
+        #: Jobs that act on many sandboxes at once: a preview fixes the set, a job acts on exactly it.
+        self.jobs = AsyncSandboxJobs(self._http)
 
     async def regions(self) -> list[Region]:
         """The regions sandboxes can be made in now, the default first, with the sizes each has room for."""

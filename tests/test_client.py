@@ -2128,3 +2128,31 @@ def test_a_list_follows_every_page_and_a_page_is_read_alone_with_its_filter_sort
     assert (params.get("q"), params.get("createdAfter"), params.get("sort"), params.get("limit")) == ("b", "2026-11-06T00:00:00+00:00", "-created", "1")
 
     assert len(agental.sandboxes.list()) == 2
+
+
+def test_a_summary_is_asked_with_the_lists_filter_and_the_facets_named() -> None:
+    counted = {"since": "2026-11-07T00:00:00.000Z", "total": {"count": 2, "microsPerHour": 108000, "spentMicros": 1200}}
+    agental, script = scripted(answer(200, counted))
+    summary = agental.sandboxes.summary(status="running", metadata={"repo": "*"}, facets=["status", "metadata.repo"])
+    assert summary["total"]["microsPerHour"] == 108000
+    params = script.sent[0].url.params
+    assert script.sent[0].url.path == "/v1/sandbox-summary"
+    assert (params.get("status"), params.get("metadata[repo]"), params.get("facets")) == ("running", "*", "status,metadata.repo")
+
+
+def test_a_job_is_previewed_by_a_filter_made_from_the_preview_once_and_waited_on() -> None:
+    counts = {"pending": 0, "acting": 0, "accepted": 0, "done": 2, "skipped": 0, "failed": 0, "uncertain": 0}
+    job = {"id": "sjb_1", "action": "stop", "options": {}, "state": "running", "total": 2, "counts": counts, "problems": []}
+    agental, script = scripted(
+        answer(201, {"id": "sjp_1", "action": "stop", "count": 2}),
+        answer(202, job),
+        answer(200, {**job, "state": "done"}),
+    )
+    preview = agental.jobs.preview("stop", filter={"status": "running", "tag": "ci"}, options={"keepMemory": True})
+    assert script.body(0) == {"action": "stop", "options": {"keepMemory": True}, "select": {"filter": {"status": "running", "tag": "ci"}}}
+    made = agental.jobs.create(preview_id=preview["id"], idempotency_key="nightly-stop-1")
+    assert script.sent[1].headers["Idempotency-Key"] == "nightly-stop-1"
+    assert script.body(1) == {"previewId": "sjp_1"}
+    assert agental.jobs.wait(made["id"])["state"] == "done"
+    with pytest.raises(ValueError, match="list"):
+        agental.jobs.preview("stop", filter={"colour": "red"})
