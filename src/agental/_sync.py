@@ -1565,15 +1565,9 @@ class SandboxJobs:
         ids: Sequence[str] | None = None,
         options: Mapping[str, Any] | None = None,
         idempotency_key: str | None = None,
-        confirm: int | None = None,
     ) -> dict[str, Any]:
-        """Makes a job from a preview, or from sandbox IDs named outright. Sent again with the same idempotency_key, the same job is answered.
-
-        A delete is made with confirm, the count its preview showed; another count is refused and nothing is deleted.
-        """
+        """Makes a job from a preview, or from sandbox IDs named outright. Sent again with the same idempotency_key, the same job is answered."""
         body: dict[str, Any] = {"previewId": preview_id} if preview_id is not None else {"action": action, "ids": builtins.list(ids or []), "options": dict(options or {})}
-        if confirm is not None:
-            body["confirm"] = confirm
         key = idempotency_key or f"sdk-{uuid.uuid4().hex[:12]}"
         answer: dict[str, Any] = self._http.run(_core.one(Call("POST", "/v1/sandbox-jobs", body=body, headers={"Idempotency-Key": key}, replay=True)))
         return answer
