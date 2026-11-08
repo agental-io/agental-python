@@ -111,6 +111,71 @@ class SandboxNetwork:
 
 
 @dataclass
+class Egress:
+    """Where a sandbox's web traffic leaves: from its server, or through a residential address in a country.
+
+    Sent to create(), set_egress() and Template.set_egress(), and read back from them.
+    """
+
+    #: box: from the server the sandbox is on, for nothing. residential: its TCP to ports 80 and 443 leaves through a
+    #: residential address in country, at $3 a GB both directions counted, from the account's credits; its UDP to
+    #: port 443 is refused, so HTTP/3 falls back to TCP.
+    via: Literal["box", "residential"]
+    #: With residential, the country, as two letters of ISO 3166-1 such as "de" or "us". None with box.
+    country: str | None = None
+    #: With residential, "sticky" keeps one address for the sandbox, "rotating" gives each connection another. Left
+    #: out, sticky. None with box.
+    session: Literal["sticky", "rotating"] | None = None
+
+
+@dataclass
+class EgressRefusal:
+    """Why we refused an account residential egress, and when."""
+
+    reason: str
+    at: str
+
+
+@dataclass
+class EgressUseCase:
+    """What an account told us its sandboxes will use residential addresses for, once for all of them."""
+
+    text: str
+    submitted_at: str
+
+
+@dataclass
+class EgressAccount:
+    """Whether the account may send sandboxes out residential, what it still needs, and what it has spent and may spend this month.
+
+    Amounts are millionths of a US dollar.
+    """
+
+    #: Whether this deployment offers residential egress at all, as policy().residential_egress says.
+    offered: bool
+    #: Whether a sandbox of the account may go out residential now: offered, nothing missing, and not refused.
+    enabled: bool
+    #: What it still needs: "plan", Fleet ($100 a month) or larger; "card", a card saved; "use_case", set_egress_use_case().
+    missing: list[str]
+    #: Set when we refused it residential egress: its sandboxes' residential traffic is refused until we lift it.
+    refused: EgressRefusal | None
+    #: What it told us its sandboxes will use residential addresses for, or None.
+    use_case: EgressUseCase | None
+    #: What a GB costs, both directions counted: 3000000 is $3.
+    micros_per_gb: int
+    #: What its residential traffic has cost this month. It is part of what billing() says it used.
+    spent_micros: int
+    #: The most its residential traffic costs in a month. Past it, residential connections are refused.
+    budget_micros: int
+    #: Whether it set its budget. False: it is default_budget_micros.
+    budget_set: bool
+    default_budget_micros: int
+    #: Why its residential connections are refused now, or None: "refused", "out_of_credit", "budget_reached" or "plan".
+    #: It is checked each minute.
+    blocked: str | None
+
+
+@dataclass
 class TemplateNetwork:
     """What a sandbox on a template may reach outside itself, before its own addresses."""
 

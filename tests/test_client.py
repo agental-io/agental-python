@@ -20,6 +20,7 @@ from agental import (
     AgentalConnectionError,
     AgentalError,
     ApiError,
+    Egress,
     AsyncAgental,
     ExecEvent,
     HiddenVariable,
@@ -2156,3 +2157,67 @@ def test_a_job_is_previewed_by_a_filter_made_from_the_preview_once_and_waited_on
     assert agental.jobs.wait(made["id"])["state"] == "done"
     with pytest.raises(ValueError, match="list"):
         agental.jobs.preview("stop", filter={"colour": "red"})
+
+
+def egress_account(**changes: Any) -> dict[str, Any]:
+    return {
+        "offered": True,
+        "enabled": False,
+        "missing": ["use_case"],
+        "refused": None,
+        "useCase": None,
+        "microsPerGb": 3_000_000,
+        "spentMicros": 0,
+        "budgetMicros": 50_000_000,
+        "budgetSet": False,
+        "defaultBudgetMicros": 50_000_000,
+        "blocked": None,
+        **changes,
+    }
+
+
+def test_residential_egress_is_read_and_set_on_the_account_a_sandbox_and_a_template() -> None:
+    told = "Our agents test our customers' sign-up flows from the countries they sell in."
+    residential = {"via": "residential", "country": "de", "session": "sticky"}
+    box = {"via": "box", "country": None, "session": None}
+    agental, script = scripted(
+        answer(200, egress_account()),
+        answer(200, egress_account(enabled=True, missing=[], useCase={"text": told, "submittedAt": "2026-11-08T00:00:00.000Z"})),
+        answer(200, egress_account(budgetMicros=0, budgetSet=True)),
+        answer(200, egress_account(refused={"reason": "not what it said", "at": "2026-11-08T00:00:00.000Z"}, blocked="refused")),
+        answer(201, sandbox()),
+        answer(200, residential),
+        answer(200, box),
+        refusal(403, "egress_not_enabled"),
+        answer(200, template()),
+        answer(200, residential),
+        answer(200, box),
+    )
+    assert agental.egress().missing == ["use_case"]
+    assert (script.sent[0].method, script.sent[0].url.path) == ("GET", "/v1/egress")
+    standing = agental.set_egress_use_case(told)
+    assert standing.use_case is not None and standing.use_case.text == told
+    assert (script.sent[1].method, script.sent[1].url.path, script.body(1)) == ("PUT", "/v1/egress/use-case", {"useCase": told})
+    assert agental.set_egress_budget(0).budget_micros == 0
+    assert (script.sent[2].method, script.sent[2].url.path, script.body(2)) == ("PUT", "/v1/egress/budget", {"budgetMicros": 0})
+    refused = agental.set_egress_budget(None)
+    assert script.body(3) == {"budgetMicros": None}
+    assert refused.refused is not None and (refused.refused.reason, refused.blocked) == ("not what it said", "refused")
+
+    # A create sends where it leaves from its first boot; what is None is not sent.
+    made = agental.sandboxes.create("abroad", egress=Egress("residential", "de"))
+    assert script.body(4) == {"name": "abroad", "egress": {"via": "residential", "country": "de"}}
+    assert made.set_egress("residential", country="de", session="sticky") == Egress("residential", "de", "sticky")
+    assert (script.sent[5].method, script.sent[5].url.path, script.body(5)) == ("PUT", f"/v1/sandboxes/{ID}/egress", residential)
+    assert made.egress() == Egress("box")
+    assert (script.sent[6].method, script.sent[6].url.path) == ("GET", f"/v1/sandboxes/{ID}/egress")
+    with pytest.raises(ApiError) as not_enabled:
+        made.set_egress("residential", country="de")
+    assert (not_enabled.value.status, not_enabled.value.code) == (403, "egress_not_enabled")
+
+    held = agental.templates.get("tpl_0000000000000002")
+    assert held.set_egress("residential", country="de", session="sticky").via == "residential"
+    assert (script.sent[9].method, script.sent[9].url.path, script.body(9)) == ("PUT", "/v1/templates/tpl_0000000000000002/egress", residential)
+    assert held.egress() == Egress("box")
+    assert (script.sent[10].method, script.sent[10].url.path) == ("GET", "/v1/templates/tpl_0000000000000002/egress")
+    assert len(script.sent) == 11

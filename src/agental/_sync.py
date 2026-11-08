@@ -27,6 +27,8 @@ from .models import (
     Billing,
     BrowserState,
     Burst,
+    Egress,
+    EgressAccount,
     Catalog,
     AutoReload,
     Checkout,
@@ -874,6 +876,24 @@ class Template:
         self.info.network = rule
         return rule
 
+    def egress(self) -> Egress:
+        """Where the web traffic of a sandbox made from it leaves. One that was never set is box: from its server."""
+        return build(Egress, self._http.run(_core.one(Call("GET", f"{self._path}/egress", replay=True))))
+
+    def set_egress(
+        self, via: Literal["box", "residential"], *, country: str | None = None, session: Literal["sticky", "rotating"] | None = None
+    ) -> Egress:
+        """Sets where the web traffic of a sandbox made from it from now on leaves.
+
+        via is "box", or "residential" with country, two letters such as "de", and session,
+        "sticky" (the default) or "rotating". A sandbox already made keeps its own, and one
+        made with egress of its own has that. Residential asks that the account may use it:
+        Agental.egress(). It takes a key with network.write. Only where policy() says
+        residential_egress.
+        """
+        body = json_of(Egress(via, country, session))
+        return build(Egress, self._http.run(_core.one(Call("PUT", f"{self._path}/egress", body=body, replay=True))))
+
     def sandboxes(self) -> list[TemplateSandbox]:
         """The sandboxes on it, each with whether it has the template as it is now, and its own addresses."""
         body = self._http.run(_core.one(Call("GET", f"{self._path}/sandboxes", replay=True)))
@@ -1096,6 +1116,24 @@ class Sandbox:
         self.info.network = SandboxNetwork(detail.outbound, list(detail.allow))
         return detail
 
+    def egress(self) -> Egress:
+        """Where its web traffic leaves: from its server (box), or through a residential address in a country."""
+        return build(Egress, self._http.run(_core.one(Call("GET", f"{self._path}/egress", replay=True))))
+
+    def set_egress(
+        self, via: Literal["box", "residential"], *, country: str | None = None, session: Literal["sticky", "rotating"] | None = None
+    ) -> Egress:
+        """Sets where its web traffic leaves, in place of what it had.
+
+        via is "box", or "residential" with country, two letters such as "us", and session,
+        "sticky" (the default) or "rotating". New connections take it within seconds,
+        without a restart, and connections already open are not moved. Residential asks
+        that the account may use it: Agental.egress(). It takes a key with network.write.
+        Only where policy() says residential_egress.
+        """
+        body = json_of(Egress(via, country, session))
+        return build(Egress, self._http.run(_core.one(Call("PUT", f"{self._path}/egress", body=body, replay=True))))
+
     def exec(self, command: CommandLine, *, timeout: float | None = None) -> ExecResult:
         """Runs a command and waits for it.
 
@@ -1253,6 +1291,7 @@ class Sandboxes:
         snapshot_id: str | None = None,
         ttl_seconds: int | None = _UNSET,
         allow: list[str] | None = None,
+        egress: Egress | None = None,
         ssh_keys: list[str] | None = None,
         tags: Sequence[str] | None = None,
         metadata: Mapping[str, str] | None = None,
@@ -1272,7 +1311,10 @@ class Sandboxes:
         the deployment's default whatever the template says. Over max_ttl_seconds of policy()
         it is refused with ttl_too_long. allow is the addresses it may reach on top of its
         template's outbound rule, from its first boot: the rule itself is the template's, set
-        with Template.set_network(). Left out, it has none of its own. ssh_keys is OpenSSH
+        with Template.set_network(). Left out, it has none of its own. egress is where its
+        web traffic leaves from its first boot, as Egress("residential", "de"): left out, its
+        template's; Egress("box") leaves from its server whatever the template says. Residential
+        asks that the account may use it: egress(), and a key with network.write. ssh_keys is OpenSSH
         public key lines let in as root as it is made, on top of the keys its template lets
         in: it turns nothing on, which its template or ssh.on() does. region is the region to
         make it in, as "eu", or several to try in order, as ["eu", "us"]: it is made in the
@@ -1309,6 +1351,8 @@ class Sandboxes:
             body["ttlSeconds"] = ttl_seconds
         if allow is not None:
             body["network"] = {"allow": list(allow)}
+        if egress is not None:
+            body["egress"] = json_of(egress)
         if ssh_keys is not None:
             body["sshKeys"] = list(ssh_keys)
         if tags is not None:
@@ -1925,6 +1969,35 @@ class Agental:
         """
         body = {"budgetMicros": budget_micros}
         return build(Burst, self._http.run(_core.one(Call("PUT", "/v1/burst/budget", body=body, replay=True))))
+
+    def egress(self) -> EgressAccount:
+        """Whether the account may send sandboxes out through residential addresses, and what it still needs.
+
+        missing names what it lacks: "plan" (Fleet or larger), "card" (one saved), "use_case"
+        (set_egress_use_case()). With what a GB costs, what it has spent this month, its
+        budget, and why its residential connections are refused now, if they are. Amounts
+        are millionths of a US dollar.
+        """
+        return build(EgressAccount, self._http.run(_core.one(Call("GET", "/v1/egress", replay=True))))
+
+    def set_egress_use_case(self, use_case: str) -> EgressAccount:
+        """Tells us what the account's sandboxes will use residential addresses for.
+
+        In a few sentences (20 to 2,000 characters): the sites, and why they need it. It is
+        said once for the whole account. Sent again, it replaces what was sent. An owner's key
+        only. Only where policy() says residential_egress.
+        """
+        body = {"useCase": use_case}
+        return build(EgressAccount, self._http.run(_core.one(Call("PUT", "/v1/egress/use-case", body=body, replay=True))))
+
+    def set_egress_budget(self, budget_micros: int | None) -> EgressAccount:
+        """Sets the most the account's residential traffic costs in a month, in millionths of a US dollar.
+
+        0 refuses all of it. None gives it the default again, default_budget_micros. An
+        owner's key only. Only where policy() says residential_egress.
+        """
+        body = {"budgetMicros": budget_micros}
+        return build(EgressAccount, self._http.run(_core.one(Call("PUT", "/v1/egress/budget", body=body, replay=True))))
 
     def usage(
         self, *, since: str | datetime | None = None, until: str | datetime | None = None, api_key_id: str | Sequence[str] | None = None
