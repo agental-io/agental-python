@@ -787,6 +787,8 @@ class Policy:
     cli_package: str | None = None
     #: Where the console is, such as https://console.agental.io: its Billing page is console_url/billing.
     console_url: str | None = None
+    #: Whether a sandbox's web traffic can leave through a residential address here, at $3 a GB. False from an API older than that.
+    residential_egress: bool = False
 
 
 @dataclass

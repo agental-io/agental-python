@@ -1350,6 +1350,8 @@ class AsyncSandboxes:
         stops: Literal["never"] | None = None,
         memory_kept: bool | None = None,
         outbound: str | Sequence[str] | None = None,
+        activity: str | Sequence[str] | None = None,
+        not_activity: str | Sequence[str] | None = None,
         metadata: Mapping[str, str] | None = None,
         not_metadata: Mapping[str, str] | None = None,
         text: str | None = None,
@@ -1361,7 +1363,7 @@ class AsyncSandboxes:
         judged as the sandbox shows them: its template's count, and its own value for a key wins.
         A metadata value of "*" is any value, the key being set; in not_metadata, the key not set.
         status is creating, running, stopped, error, restoring or migrating; outbound is open,
-        blocked or allowlist; stops="never" is no auto-stop time; text is found in the name or id.
+        blocked or allowlist; activity is low-cpu, disk-full, memory-full or not-read; stops="never" is no auto-stop time; text is found in the name or id.
         """
         found: builtins.list[AsyncSandbox] = []
         cursor: str | None = None
@@ -1369,7 +1371,7 @@ class AsyncSandboxes:
             page = await self.page(
                 tag=tag, not_tag=not_tag, status=status, archived=archived, size=size, region=region, template_id=template_id,
                 created_by=created_by, created_after=created_after, created_before=created_before, stopped_before=stopped_before,
-                stops_before=stops_before, stops=stops, memory_kept=memory_kept, outbound=outbound, metadata=metadata,
+                stops_before=stops_before, stops=stops, memory_kept=memory_kept, outbound=outbound, activity=activity, not_activity=not_activity, metadata=metadata,
                 not_metadata=not_metadata, text=text, limit=200, cursor=cursor,
             )
             found.extend(page.sandboxes)
@@ -1395,6 +1397,8 @@ class AsyncSandboxes:
         stops: Literal["never"] | None = None,
         memory_kept: bool | None = None,
         outbound: str | Sequence[str] | None = None,
+        activity: str | Sequence[str] | None = None,
+        not_activity: str | Sequence[str] | None = None,
         metadata: Mapping[str, str] | None = None,
         not_metadata: Mapping[str, str] | None = None,
         text: str | None = None,
@@ -1405,13 +1409,13 @@ class AsyncSandboxes:
         """One page of the sandboxes that match, as list() narrows them: up to limit of them (1 to 200).
 
         Pass its next_cursor as cursor, with the same sort, for the page after it. sort is created
-        (the default), -created, name, -name, status, -status, stopped, -stopped, cost or -cost. Sorted by anything
+        (the default), -created, name, -name, status, -status, stopped, -stopped, cost, -cost, -cpu, -memory or -disk. Sorted by anything
         but created, a sandbox that changes while the pages are read can be missed or met twice.
         """
         query = _filter_query(
             tag=tag, not_tag=not_tag, status=status, archived=archived, size=size, region=region, template_id=template_id,
             created_by=created_by, created_after=created_after, created_before=created_before, stopped_before=stopped_before,
-            stops_before=stops_before, stops=stops, memory_kept=memory_kept, outbound=outbound, metadata=metadata,
+            stops_before=stops_before, stops=stops, memory_kept=memory_kept, outbound=outbound, activity=activity, not_activity=not_activity, metadata=metadata,
             not_metadata=not_metadata, text=text,
         )
 
@@ -1446,6 +1450,8 @@ class AsyncSandboxes:
         stops: Literal["never"] | None = None,
         memory_kept: bool | None = None,
         outbound: str | Sequence[str] | None = None,
+        activity: str | Sequence[str] | None = None,
+        not_activity: str | Sequence[str] | None = None,
         metadata: Mapping[str, str] | None = None,
         not_metadata: Mapping[str, str] | None = None,
         text: str | None = None,
@@ -1462,7 +1468,7 @@ class AsyncSandboxes:
         query = _filter_query(
             tag=tag, not_tag=not_tag, status=status, archived=archived, size=size, region=region, template_id=template_id,
             created_by=created_by, created_after=created_after, created_before=created_before, stopped_before=stopped_before,
-            stops_before=stops_before, stops=stops, memory_kept=memory_kept, outbound=outbound, metadata=metadata,
+            stops_before=stops_before, stops=stops, memory_kept=memory_kept, outbound=outbound, activity=activity, not_activity=not_activity, metadata=metadata,
             not_metadata=not_metadata, text=text,
         )
         if facets:
@@ -1488,6 +1494,8 @@ def _filter_query(
     stops: str | None,
     memory_kept: bool | None,
     outbound: str | Sequence[str] | None,
+    activity: str | Sequence[str] | None = None,
+    not_activity: str | Sequence[str] | None = None,
     metadata: Mapping[str, str] | None,
     not_metadata: Mapping[str, str] | None,
     text: str | None,
@@ -1510,6 +1518,8 @@ def _filter_query(
     many("templateId", template_id)
     many("createdBy", created_by)
     many("outbound", outbound)
+    many("activity", activity)
+    many("notActivity", not_activity)
     many("createdAfter", time(created_after))
     many("createdBefore", time(created_before))
     many("stoppedBefore", time(stopped_before))
@@ -1610,7 +1620,7 @@ class AsyncSandboxJobs:
 def _filter_defaults(given: Mapping[str, Any]) -> dict[str, Any]:
     """list()'s arguments by name, every one there, for _filter_query."""
     names = ("tag", "not_tag", "status", "archived", "size", "region", "template_id", "created_by", "created_after", "created_before",
-             "stopped_before", "stops_before", "stops", "memory_kept", "outbound", "metadata", "not_metadata", "text")
+             "stopped_before", "stops_before", "stops", "memory_kept", "outbound", "activity", "not_activity", "metadata", "not_metadata", "text")
     unknown = set(given) - set(names)
     if unknown:
         raise ValueError(f"filter takes list()'s arguments; not {', '.join(sorted(unknown))}")
