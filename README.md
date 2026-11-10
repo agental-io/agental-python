@@ -120,6 +120,7 @@ sandbox.stop(keep_memory=True)  # or keep its memory too, at 10%: start() puts b
 sandbox.start()  # waits until it is running, also when it has to be brought back from storage
 
 copy = sandbox.fork()  # a new sandbox with the same disk
+live = sandbox.fork(memory=True)  # or one that goes on from where it was, every process running on (Firecracker boxes only)
 
 snapshot = sandbox.snapshot("before-upgrade")
 sandbox.restore(snapshot.id)  # roll the disk back

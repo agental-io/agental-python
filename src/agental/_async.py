@@ -1218,13 +1218,26 @@ class AsyncSandbox:
         timeout: float = _core.CREATE_TIMEOUT,
         max_burst_fee_micros: int | None = None,
         max_burst_wait: float | None = None,
+        memory: bool = False,
     ) -> AsyncSandbox:
         """Copies it into a new sandbox, running, with the same disk.
 
         From then on the two share nothing. Nothing that was running here is started in the
         copy. max_burst_fee_micros and max_burst_wait are as for Sandboxes.create().
+
+        With memory=True the copy goes on from where this one was instead: every process
+        running on, with what it held in memory, under the copy's own address, machine id and
+        SSH host key. Its processes still hold this sandbox's environment, its token among them,
+        until they end. A running sandbox is paused while its memory is written, about a second
+        for every 2 to 3 GiB; one stopped with keep_memory gives the memory it kept. Only on
+        Firecracker boxes: elsewhere it raises 501 driver_operation_unavailable, and for a
+        stopped sandbox that kept no memory 409 invalid_state. The copy is made in this
+        sandbox's organization.
         """
-        body, key, config = {"name": name or _core.made("sbx")}, idempotency_key or _core.made("sdk"), self._http.config
+        body: dict[str, object] = {"name": name or _core.made("sbx")}
+        if memory:
+            body["memory"] = True
+        key, config = idempotency_key or _core.made("sdk"), self._http.config
         steps = _core.burst_waited(lambda: _core.make_sandbox(f"{self._path}/fork", body, key, timeout, config, max_burst_fee_micros), max_burst_wait)
         info, fee = await self._http.run(steps)
         return AsyncSandbox(self._http, info, fee)

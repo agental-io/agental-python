@@ -412,6 +412,11 @@ def test_a_fork_a_snapshot_and_a_port_ask_for_what_the_api_needs_of_them() -> No
     assert script.sent[1].headers["idempotency-key"]
     assert script.body(1) == {"name": "second-try"}
 
+    # memory is sent only when asked for.
+    with_memory, memory_script = scripted(answer(200, sandbox()), answer(201, sandbox(id="sbx_fork000000000001", name="going-on")))
+    assert with_memory.sandboxes.get(ID).fork("going-on", memory=True).id == "sbx_fork000000000001"
+    assert memory_script.body(1) == {"name": "going-on", "memory": True}
+
     assert box.snapshot("before").id == "snap_1"
     restored = box.restore("snap_1")
     assert (restored.snapshot.name, restored.discarded) == ("before", ["snap_2"])
