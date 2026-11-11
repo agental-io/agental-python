@@ -268,7 +268,7 @@ class SandboxInfo:
     #: True when its disk is kept in storage. A start brings it back, which takes longer.
     archived: bool
     archived_at: str | None
-    #: When it was last stopped and started again to be moved to another server.
+    #: When it was last stopped and started again to be moved to another server. Only on older sandboxes: none is moved now.
     migrated_at: str | None
     #: What it may reach outside itself.
     network: SandboxNetwork
