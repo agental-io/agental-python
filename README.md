@@ -206,6 +206,22 @@ sandbox.ssh.off()  # closes the port and cuts whoever is connected
 
 SSH stays on through a stop and a start. `ssh_keys` at a create lets the keys in, but turns nothing on: `ssh.on()` does, or its template. A template can do both for every sandbox made from it: `template.ssh_on()` and `template.add_ssh_key(line)`. The agental command's `agental ssh` does all of it in one go. `agental.policy().ssh` says whether sandboxes can be reached over SSH where you are.
 
+## Terminal
+
+A login shell in the sandbox, as root in `/root`, over a WebSocket: no key and no port, as the console's Terminal tab has it.
+
+```python
+with sandbox.terminal(cols=120, rows=32) as terminal:
+    terminal.write("cd /opt/agental && ls\n")
+    terminal.resize(132, 40)  # as your own terminal's window changes
+    terminal.write("exit 3\n")
+    for chunk in terminal:  # bytes, as the shell wrote them
+        print(chunk.decode(errors="replace"), end="")
+print(terminal.exit.exit_code)  # 3
+```
+
+`AsyncSandbox.terminal()` is the same with `await` and `async for`. It needs a key with the `exec` action, and the sandbox running. The API closes it when the shell ends (`exit.close_code` 1000, with `exit_code`), when the key or the sandbox no longer lets it be open (4003), after 30 minutes with nothing typed (4008), and when its sandbox stops answering (4011); `exit.error_message` says why when the API did. Closing it hangs the shell up, as an SSH session's end does: start what must outlive it with `nohup` or `setsid`. The command's `agental shell <sandbox-id>` opens one in your own terminal.
+
 ## Desktop
 
 A sandbox can have a screen of its own, which programs open windows on and which you watch and use in a browser.

@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 import base64
 import builtins
+import json
+import logging
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import datetime
@@ -13,8 +15,11 @@ from typing import Any, Literal, overload
 from urllib.parse import quote
 
 import httpx
+from websockets.sync.client import ClientConnection
+from websockets.exceptions import ConnectionClosed, InvalidStatus
+from websockets.typing import Subprotocol
 
-from . import _core
+from . import _core, _ws
 from ._core import Answer, Call, Sleep, Steps
 from ._version import __version__
 from .errors import AgentalConnectionError, AgentalError
@@ -89,6 +94,7 @@ from .models import (
     TemplateSandbox,
     TemplateSsh,
     TemplateStart,
+    TerminalExit,
     Usage,
     Webhook,
     build,
@@ -101,6 +107,11 @@ CommandLine = str | list[str] | tuple[str, ...]
 _USER_AGENT = f"agental-python/{__version__}"
 
 _UNSET: Any = object()
+
+#: What a terminal's WebSocket logs to. Never at DEBUG, where websockets would log the handshake's
+#: headers, and with them the ticket.
+_TERMINAL_LOG = logging.getLogger("agental.terminal")
+_TERMINAL_LOG.setLevel(logging.INFO)
 
 
 class _Http:
@@ -191,6 +202,101 @@ class _Http:
     def close(self) -> None:
         if self._owned:
             self._client.close()
+
+
+class Terminal:
+    """A login shell in a sandbox, as root in /root, open over a WebSocket.
+
+    Its output is read by iterating it, each piece as the bytes the shell wrote; what is typed is
+    sent with write(), and a new size with resize(). It ends when the shell does, when close() is
+    called, or when the API closes it; then exit says how. Closing it hangs the shell up: what runs
+    in it is sent SIGHUP, as when an SSH session ends. Use it in an with block to close it.
+    """
+
+    def __init__(self, connection: ClientConnection) -> None:
+        self._connection = connection
+        self._state = _core.TerminalState()
+        self._exit: TerminalExit | None = None
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} {'ended' if self._exit else 'open'}>"
+
+    @property
+    def started(self) -> bool:
+        """Whether the shell has started. What is typed before it has is kept, up to 64 KiB, and given to it once it has."""
+        return self._state.started
+
+    @property
+    def exit(self) -> TerminalExit | None:
+        """How it ended, once its output has been read to the end. None before."""
+        return self._exit
+
+    def write(self, data: str | bytes) -> None:
+        """Sends what is typed: text as UTF-8, or bytes as they are."""
+        raw = data.encode() if isinstance(data, str) else bytes(data)
+        try:
+            for at in range(0, len(raw), _core.TERMINAL_INPUT_BYTES):
+                self._connection.send(raw[at : at + _core.TERMINAL_INPUT_BYTES])
+        except ConnectionClosed as error:
+            raise AgentalConnectionError("The terminal has ended.") from error
+
+    def resize(self, cols: int, rows: int) -> None:
+        """Gives the terminal a new size, 1 to 1000 columns and rows, as a local terminal's window changes."""
+        body = json.dumps({"type": "resize", **_core.terminal_size(cols, rows)})
+        try:
+            self._connection.send(body)
+        except ConnectionClosed as error:
+            raise AgentalConnectionError("The terminal has ended.") from error
+
+    def __iter__(self) -> Iterator[bytes]:
+        """Its output, as it arrives, until it ends."""
+        try:
+            for message in self._connection:
+                if isinstance(message, str):
+                    self._state.said(message)
+                elif message:
+                    yield bytes(message)
+        except ConnectionClosed:
+            pass
+        self._exit = self._state.ended(self._connection.close_code, self._connection.close_reason)
+
+    def wait(self) -> TerminalExit:
+        """Reads it to its end and says how it ended. Output not read yet is dropped."""
+        for _ in self:
+            pass
+        assert self._exit is not None
+        return self._exit
+
+    def close(self) -> None:
+        """Closes it, which hangs the shell up."""
+        self._connection.close(1000, "closed")
+
+    def __enter__(self) -> Terminal:
+        return self
+
+    def __exit__(self, kind: type[BaseException] | None, error: BaseException | None, trace: TracebackType | None) -> None:
+        self.close()
+
+
+def _open_terminal(http: _Http, path: str, size: dict[str, int]) -> Terminal:
+    """Asks for a ticket, and opens the WebSocket with it as a subprotocol, never in the URL."""
+    answer = http.run(_core.one(Call("POST", f"{path}/terminal", body=size)))
+    url = _core.websocket_url(http.config.base_url, answer["path"])
+    protocols = [Subprotocol(_core.TERMINAL_PROTOCOL), Subprotocol(_core.TICKET_PROTOCOL_PREFIX + str(answer["ticket"]))]
+    try:
+        connection = _ws.connect(url, subprotocols=protocols, user_agent_header=_USER_AGENT, open_timeout=30, logger=_TERMINAL_LOG)
+    except InvalidStatus as error:
+        # A redirect is refused here too: it would carry the ticket to wherever it points.
+        why = _core.terminal_refusal(error.response.status_code, bytes(error.response.body or b""))
+        raise AgentalConnectionError(f"The terminal could not be opened: {why}.") from None
+    except Exception as error:
+        # Whatever else stopped the handshake, a timeout among them (asyncio's own before 3.11),
+        # said by its kind alone: nothing of the handshake, the ticket in it, is carried on.
+        raise AgentalConnectionError(f"The terminal could not be opened: {type(error).__name__}.") from None
+    if connection.subprotocol != _core.TERMINAL_PROTOCOL:
+        connection.close(1000, "not a terminal")
+        raise AgentalConnectionError(f"The API answered the terminal with the subprotocol {connection.subprotocol!r}, not {_core.TERMINAL_PROTOCOL}.")
+    return Terminal(connection)
 
 
 class Files:
@@ -1145,6 +1251,22 @@ class Sandbox:
         itself: a command cut off by a proxy or a move may have done part of its work.
         """
         return build(ExecResult, self._http.run(_core.one(_core.command_call(f"{self._path}/exec", command, _ms(timeout)))))
+
+    def terminal(self, *, cols: int = 80, rows: int = 24) -> Terminal:
+        """
+        Opens a terminal on it: a login shell as root in /root, with what a command runs with, in a
+        terminal of cols by rows. Read its output by iterating it, type with write(), change its
+        size with resize(), and end it with close(); exit says how it ended. It needs the key
+        action exec, and the sandbox running. The API closes it after 30 minutes with nothing
+        typed, and when the key or the sandbox no longer lets it be open.
+
+            with sandbox.terminal(cols=120, rows=32) as terminal:
+                terminal.write("uname -a; exit\\n")
+                for chunk in terminal:
+                    print(chunk.decode(errors="replace"), end="")
+                print(terminal.exit)
+        """
+        return _open_terminal(self._http, self._path, _core.terminal_size(cols, rows))
 
     def exec_stream(self, command: CommandLine, *, timeout: float | None = None) -> Iterator[ExecEvent]:
         """Runs a command and gives its output as it arrives, then what it exited with."""

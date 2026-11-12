@@ -20,7 +20,7 @@ from datetime import datetime
 from typing import Any
 
 from .errors import AgentalConnectionError, AgentalError, AgentalTimeoutError, ApiError, ProxyError
-from .models import ExecEvent
+from .models import ExecEvent, TerminalExit
 
 DEFAULT_BASE_URL = "https://agental.io"
 
@@ -389,3 +389,86 @@ class StreamReader:
     def ended(self) -> None:
         if not self.exited:
             raise AgentalConnectionError("The stream ended before the command said what it exited with. It may still be running.")
+
+
+#: The WebSocket subprotocol a sandbox's terminal speaks.
+TERMINAL_PROTOCOL = "agental.terminal.v1"
+#: The subprotocol a ticket is sent as: this, then the ticket. A ticket is never put in a URL.
+TICKET_PROTOCOL_PREFIX = "ticket."
+#: The most the API takes in one message of what is typed: longer input is sent in pieces this size.
+TERMINAL_INPUT_BYTES = 64 * 1024
+
+
+def terminal_size(cols: int, rows: int) -> dict[str, int]:
+    """The body a terminal is asked for with, or an error that says what its size may be."""
+    for what, value in (("cols", cols), ("rows", rows)):
+        if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 1000:
+            raise AgentalError(f"A terminal's {what} is a whole number from 1 to 1000, not {value!r}.")
+    return {"cols": cols, "rows": rows}
+
+
+def websocket_url(base_url: str, path: str) -> str:
+    """The ws: or wss: URL of a path on the API's own address.
+
+    Only a path is taken, so that no answer can send the WebSocket, and the ticket in it, to another host.
+    """
+    if not isinstance(path, str) or not path.startswith("/") or path.startswith("//") or re.search(r"[\\\s]", path):
+        raise AgentalError(f"The API gave the terminal a path that is not one on its own address: {str(path)[:200]!r}.")
+    if base_url.startswith("https://"):
+        return "wss://" + base_url[len("https://") :].rstrip("/") + path
+    if base_url.startswith("http://"):
+        return "ws://" + base_url[len("http://") :].rstrip("/") + path
+    raise AgentalError(f"A terminal is opened on an http: or https: API, not {base_url!r}.")
+
+
+def _whole(value: Any) -> int | None:
+    """A whole number the guest said, which is the tenant's: None for anything else."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+class TerminalState:
+    """What a terminal's text messages have said: whether it started, how the shell exited, and the API's error."""
+
+    def __init__(self) -> None:
+        self.started = False
+        self.exit: dict[str, Any] | None = None
+        self.error: dict[str, str] | None = None
+
+    def said(self, text: str) -> None:
+        try:
+            message = json.loads(text)
+        except ValueError:
+            return
+        if not isinstance(message, dict):
+            return
+        kind = message.get("type")
+        if kind == "started":
+            self.started = True
+        elif kind == "exit":
+            self.exit = message
+        elif kind == "error":
+            self.error = {"code": str(message.get("code", "terminal")), "message": str(message.get("message", ""))}
+
+    def ended(self, close_code: int | None, reason: str | None) -> TerminalExit:
+        exit = self.exit or {}
+        return TerminalExit(
+            exit_code=_whole(exit.get("code")) if self.exit is not None else None,
+            signal=_whole(exit.get("signal")) or 0,
+            timed_out=exit.get("timedOut") is True,
+            close_code=close_code if close_code is not None else 1006,
+            reason=reason or "",
+            error_code=self.error["code"] if self.error else None,
+            error_message=self.error["message"] if self.error else None,
+        )
+
+
+def terminal_refusal(status: int | None, body: bytes) -> str:
+    """Why a terminal's handshake was refused, in words, from the API's answer. Never the ticket."""
+    if status is None:
+        return "the connection failed"
+    try:
+        error = json.loads(body).get("error", {})
+        message = str(error.get("message", "")).strip()
+    except (ValueError, AttributeError):
+        message = ""
+    return f"HTTP {status}" + (f": {message[:300]}" if message else "")

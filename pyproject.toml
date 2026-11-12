@@ -14,7 +14,8 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [{ name = "VERTIXER LTD" }]
-dependencies = ["httpx>=0.27,<1"]
+# websockets opens a sandbox's terminal (Sandbox.terminal): httpx speaks no WebSocket.
+dependencies = ["httpx>=0.27,<1", "websockets>=15,<17"]
 keywords = ["agental", "sandbox", "agents", "virtual-machine"]
 classifiers = [
   "Development Status :: 3 - Alpha",

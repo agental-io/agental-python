@@ -448,6 +448,32 @@ class ExecEvent:
 
 
 @dataclass
+class TerminalExit:
+    """How a sandbox's terminal ended.
+
+    ``close_code`` is 1000 when the shell ended, and then ``exit_code`` says what it exited with.
+    4003: what let it be opened no longer does (a key taken away, a session ended, the sandbox
+    stopped). 4008: nothing was typed for 30 minutes. 4011: it could not be opened, or its sandbox
+    stopped answering. 1006: the connection was lost.
+    """
+
+    #: What the shell exited with, or None when the terminal was closed before the shell said.
+    exit_code: int | None
+    #: The signal that ended the shell, 0 when none did.
+    signal: int
+    #: Whether the shell was ended because a terminal is kept open at most 12 hours.
+    timed_out: bool
+    #: The WebSocket's close code.
+    close_code: int
+    #: The close reason the API gave, in words.
+    reason: str
+    #: The code of the error the API said before it closed the terminal, when it said one.
+    error_code: str | None = None
+    #: That error's message.
+    error_message: str | None = None
+
+
+@dataclass
 class Command:
     """A command left running in the background, and its output so far."""
 
@@ -848,6 +874,8 @@ class Policy:
     runs_on: bool = False
     #: Whether a sandbox can be stopped with its memory kept here: stop(keep_memory=True). False from an API older than that.
     keep_memory: bool = False
+    #: Whether a sandbox's terminal can be opened here: a login shell in it, over a WebSocket (POST /v1/sandboxes/{id}/terminal). False from an API older than that.
+    terminal: bool = False
     #: The npm package the agental command is published as, for npx <it>@latest. None until it is published.
     cli_package: str | None = None
     #: Where the console is, such as https://console.agental.io: its Billing page is console_url/billing.
