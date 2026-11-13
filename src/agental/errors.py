@@ -23,6 +23,8 @@ class ApiError(AgentalError):
         *,
         fee_micros: int | None = None,
         retry_after_seconds: int | None = None,
+        refused_last_hour: int | None = None,
+        headroom_url: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -31,13 +33,19 @@ class ApiError(AgentalError):
         #: On a create refused with capacity_exceeded: the other regions that have room for its size now, to send it
         #: again to with a new key. Empty when none has, and None on any other error.
         self.regions_with_room = regions_with_room
-        #: On a start refused with 429 for its burst (see BURST_REFUSALS): the burst fee it would have cost, in
+        #: On a start refused with 429 or 409 for its burst (see BURST_REFUSALS): the burst fee it would have cost, in
         #: millionths of a US dollar. None on any other error.
         self.fee_micros = fee_micros
-        #: On a start refused with 429 for its burst: seconds until the same start would cost no burst fee. None
+        #: On a start refused with 429 or 409 for its burst: seconds until the same start would cost no burst fee. None
         #: where waiting would not help (running_limit_reached, or a start larger than the plan's whole free
         #: burst), and on any other error.
         self.retry_after_seconds = retry_after_seconds
+        #: On a create or start refused with 429 or 409: how many of the account's creates and starts were refused with the
+        #: same code in the last hour, this one with them. None on any other error.
+        self.refused_last_hour = refused_last_hour
+        #: On a create or start refused with 429 or 409: the console's page where the account sees every refusal, as
+        #: headroom() reads them. None on any other error.
+        self.headroom_url = headroom_url
 
 
 #: The codes a create, fork or start is refused with, with the status 429, for its account's plan.

@@ -115,7 +115,7 @@ def error_of(status: int, text: str) -> AgentalError:
         if isinstance(error["code"], str) and isinstance(error["message"], str):
             room = error.get("regionsWithRoom")
             regions = [one for one in room if isinstance(one, str)] if isinstance(room, list) else None
-            fee, after = error.get("feeMicros"), error.get("retryAfterSeconds")
+            fee, after, refused, url = error.get("feeMicros"), error.get("retryAfterSeconds"), error.get("refusedLastHour"), error.get("headroomUrl")
             return ApiError(
                 status,
                 error["code"],
@@ -123,6 +123,8 @@ def error_of(status: int, text: str) -> AgentalError:
                 regions,
                 fee_micros=fee if isinstance(fee, int) and not isinstance(fee, bool) else None,
                 retry_after_seconds=after if isinstance(after, int) and not isinstance(after, bool) else None,
+                refused_last_hour=refused if isinstance(refused, int) and not isinstance(refused, bool) else None,
+                headroom_url=url if isinstance(url, str) else None,
             )
     except (ValueError, AttributeError, KeyError, TypeError):
         pass

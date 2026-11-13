@@ -31,7 +31,6 @@ from .models import (
     ApiKeyUsage,
     Billing,
     BrowserState,
-    Burst,
     Egress,
     EgressAccount,
     Catalog,
@@ -50,6 +49,9 @@ from .models import (
     ExecEvent,
     ExecResult,
     FileWritten,
+    Headroom,
+    HeadroomNow,
+    HeadroomStep,
     HiddenVariable,
     HostRoute,
     Invite,
@@ -2084,31 +2086,40 @@ class Agental:
         """The account's mail: the handle every address of its sandboxes carries, what its plan allows, and what it has had of that today."""
         return build(AccountEmail, self._http.run(_core.one(Call("GET", "/v1/email", replay=True))))
 
-    def burst(self, *, size: Size | None = None, count: int | None = None) -> Burst:
-        """Where the account stands against its plan, in millionths of a US dollar.
+    def headroom(
+        self,
+        *,
+        from_: str | datetime | None = None,
+        to: str | datetime | None = None,
+        step: HeadroomStep | None = None,
+    ) -> Headroom:
+        """How close the account runs to its plan's limits, in millionths of a US dollar.
 
-        How many small sandboxes it runs and may run at once (running_units; a tiny counts
-        half, a medium 2, a large 4), what its burst meter reads against the free burst, what
-        it has spent on burst fees this month against its budget, and what one sandbox of each
-        size would cost to start now. With size, and count, quote says what starting that many
-        now would cost.
+        now is where it stands: how many small sandboxes it runs and may run at once
+        (running_units; a tiny counts half, a medium 2, a large 4), what its burst meter reads
+        against the free burst, what it has spent on burst fees this month against its budget,
+        and what one sandbox of each size would cost to start now. Over the range, today (UTC)
+        unless from_ and to say otherwise, 90 days at most: what it ran against its running
+        count (series, at_running_count_ms), each burst, what did not start and why (refused),
+        and how fast what started ran (speed). step is 10m, hour or day; left out, 10m up to
+        two days, hour up to 8, day past that.
 
-        Where enforced is True, a create, fork or start past the running count raises an
+        Where now.enforced is True, a create, fork or start past the running count raises an
         ApiError 429 running_limit_reached; one faster than the free burst costs a burst fee,
         and is refused with burst_budget_reached past the monthly budget. On the free plan,
         until the account has paid for something, the running count is Prices.free.unpaid_units.
         """
-        query = {"size": size, "count": None if count is None else str(count)}
-        return build(Burst, self._http.run(_core.one(Call("GET", "/v1/burst", query=query, replay=True))))
+        query = {"from": _core.iso(from_), "to": _core.iso(to), "step": step}
+        return build(Headroom, self._http.run(_core.one(Call("GET", "/v1/headroom", query=query, replay=True))))
 
-    def set_burst_budget(self, budget_micros: int | None) -> Burst:
+    def set_headroom_budget(self, budget_micros: int | None) -> HeadroomNow:
         """Sets the most the account spends on burst fees in a month, in millionths of a US dollar.
 
         0 refuses every start that would cost one. None gives it the default again,
-        default_budget_micros. It answers with the account's burst as it stands now.
+        default_budget_micros. It answers with where the account stands now, as headroom().now.
         """
         body = {"budgetMicros": budget_micros}
-        return build(Burst, self._http.run(_core.one(Call("PUT", "/v1/burst/budget", body=body, replay=True))))
+        return build(HeadroomNow, self._http.run(_core.one(Call("PUT", "/v1/headroom/budget", body=body, replay=True))))
 
     def egress(self) -> EgressAccount:
         """Whether the account may send sandboxes out through residential addresses, and what it still needs.

@@ -1187,8 +1187,8 @@ class BurstQuote:
 
 
 @dataclass
-class Burst:
-    """Where the account stands against its plan: its running count, its burst meter against the free burst, and its burst fees against its budget.
+class HeadroomNow:
+    """Where the account stands against its plan now: its running count, its burst meter against the free burst, and its burst fees against its budget.
 
     Counts are in small sandboxes: a tiny counts half, a medium 2, a large 4. Amounts are
     millionths of a US dollar.
@@ -1236,8 +1236,117 @@ class Burst:
     default_budget_micros: int
     #: What one sandbox of each size its plan makes would cost to start now.
     next_start: list[BurstQuote]
-    #: With burst(size=...), what starting that many of that size now would cost. None without.
+    #: Always None here.
     quote: BurstQuote | None
+
+
+#: How often headroom() reads its series: every 10 minutes, hour or day.
+HeadroomStep = Literal["10m", "hour", "day"]
+#: Why a create or start did not start. running_count: the plan's running count (running_limit_reached). budget:
+#: the month's budget for burst fees (burst_budget_reached). fee_cap: the most the caller would pay
+#: (burst_fee_too_high). room: no room on agental's servers. other: any other refusal, by its code.
+RefusalReason = Literal["running_count", "budget", "fee_cap", "room", "other"]
+
+
+@dataclass
+class HeadroomPoint:
+    """One step of headroom()'s series."""
+
+    #: The step's start.
+    at: str
+    #: What ran at the step's end, in MB: 4096 is one small.
+    running_mb: int
+    #: What ran at its most in the step.
+    peak_running_mb: int
+    #: The burst meter at the step's end, in MB.
+    meter_mb: int
+    starts: int
+    fees_micros: int
+    #: Creates and starts that did not start in the step, every try counted.
+    refused: int
+
+
+@dataclass
+class HeadroomSource:
+    """Who started sandboxes in a burst, and what it cost."""
+
+    #: runs-on: a runs-on repository's machine. key: a sandbox made with an API key. other: neither (made in the
+    #: console, or by agental itself).
+    kind: Literal["runs-on", "key", "other"]
+    #: The repository, as owner/name, or the key's name.
+    name: str | None
+    starts: int
+    fees_micros: int
+
+
+@dataclass
+class HeadroomBurst:
+    """A stretch when the burst meter was over the free burst, so that every start in it paid a fee."""
+
+    started_at: str
+    #: None where the meter was still over the free burst when the range ended.
+    ended_at: str | None
+    peak_meter_mb: int
+    fees_micros: int
+    starts: int
+    #: Starts by size.
+    by_size: dict[str, int]
+    by_source: list[HeadroomSource]
+    #: What did not start during it, by reason (see RefusalReason).
+    refused: dict[str, int]
+
+
+@dataclass
+class HeadroomRefusalCount:
+    """How many creates and starts did not start for one reason and code, every try counted."""
+
+    reason: RefusalReason
+    code: str
+    count: int
+
+
+@dataclass
+class HeadroomRefusals:
+    """What did not start in the range."""
+
+    total: int
+    by_reason: list[HeadroomRefusalCount]
+
+
+@dataclass
+class HeadroomSpeed:
+    """From a create or start being let through to its sandbox running, over those that ran in the range."""
+
+    count: int
+    p50_ms: int | None
+    p90_ms: int | None
+    p99_ms: int | None
+    max_ms: int | None
+
+
+@dataclass
+class Headroom:
+    """How close the account runs to its plan's limits.
+
+    Where it stands now, and over a range: what it ran against its running count, its burst
+    meter against its free burst, each burst, what did not start and why, and how fast what
+    started ran. Amounts are millionths of a US dollar.
+    """
+
+    now: HeadroomNow
+    from_: str
+    to: str
+    step: HeadroomStep
+    series: list[HeadroomPoint]
+    #: The newest first. One that paid nothing is left out.
+    bursts: list[HeadroomBurst]
+    refused: HeadroomRefusals
+    speed: HeadroomSpeed
+    #: How long, in the range, the account ran within one small sandbox of its running count.
+    at_running_count_ms: int
+    #: The most it ran at once in the range, in MB, and when.
+    peak_running_mb: int
+    peak_at: str | None
 
 
 @dataclass
@@ -1615,7 +1724,7 @@ class BurstFee:
     half_life_minutes: int
     #: What each GiB of a start past the free burst costs, in millionths of a US dollar.
     fee_micros_per_gib: int
-    #: What an account spends on burst fees in a month at most unless it sets another budget: set_burst_budget().
+    #: What an account spends on burst fees in a month at most unless it sets another budget: set_headroom_budget().
     default_budget_micros: int
     #: The most one start costs in burst fees, in hours of its size's list price. None from an API older than it.
     fee_cap_hours: int | None = None
@@ -1781,7 +1890,7 @@ class Billing:
     #: True while the account must save a card, or buy a plan, before it uses agental: plans are enforced and it is
     #: on the free plan with no card saved.
     needs_plan: bool = False
-    #: The part of used_micros that is burst fees: what starts faster than the plan's free burst cost. burst() says where the account stands.
+    #: The part of used_micros that is burst fees: what starts faster than the plan's free burst cost. headroom() says where the account stands.
     burst_micros: int = 0
     #: The auto-reload: the top-up the saved card is charged for when the credits run out, with its credits added before any sandbox is stopped. None while it is off.
     auto_reload: AutoReloadSetting | None = None

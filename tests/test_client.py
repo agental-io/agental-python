@@ -733,25 +733,55 @@ def burst(**changes: Any) -> dict[str, Any]:
     }
 
 
-def test_the_burst_is_read_with_a_quote_and_its_budget_is_set_and_cleared() -> None:
+def headroom(**changes: Any) -> dict[str, Any]:
+    return {
+        "now": burst(),
+        "from": "2026-11-13T00:00:00.000Z",
+        "to": "2026-11-13T10:00:00.000Z",
+        "step": "10m",
+        "series": [{"at": "2026-11-13T00:00:00.000Z", "runningMb": 4096, "peakRunningMb": 8192, "meterMb": 2048, "starts": 2, "feesMicros": 0, "refused": 1}],
+        "bursts": [
+            {
+                "startedAt": "2026-11-13T09:42:00.000Z",
+                "endedAt": None,
+                "peakMeterMb": 819200,
+                "feesMicros": 500_000,
+                "starts": 30,
+                "bySize": {"large": 30},
+                "bySource": [{"kind": "runs-on", "name": "acme/web", "starts": 30, "feesMicros": 500_000}],
+                "refused": {"running_count": 2},
+            }
+        ],
+        "refused": {"total": 1, "byReason": [{"reason": "running_count", "code": "running_limit_reached", "count": 1}]},
+        "speed": {"count": 2, "p50Ms": 900, "p90Ms": 1200, "p99Ms": 1200, "maxMs": 1200},
+        "atRunningCountMs": 0,
+        "peakRunningMb": 8192,
+        "peakAt": "2026-11-13T00:05:00.000Z",
+        **changes,
+    }
+
+
+def test_the_headroom_is_read_over_today_or_a_range_and_its_budget_is_set_and_cleared() -> None:
     agental, script = scripted(
-        answer(200, burst()),
-        answer(200, burst(quote=quote("medium", 640_000, count=30, freeInSeconds=1800))),
+        answer(200, headroom()),
+        answer(200, headroom(step="hour")),
         answer(200, burst(budgetMicros=0, budgetSet=True)),
         httpx.ConnectError("lost"),
         answer(200, burst()),
     )
-    read = agental.burst()
-    assert (read.running_units, read.free_burst_units, read.quote, read.next_start[2].size) == (100, 100, None, "medium")
-    assert (script.sent[0].method, script.sent[0].url.path, script.sent[0].url.query) == ("GET", "/v1/burst", b"")
-    quoted = agental.burst(size="medium", count=30).quote
-    assert quoted is not None and (quoted.fee_micros, quoted.free_in_seconds, quoted.over_running_count) == (640_000, 1800, False)
-    assert script.sent[1].url.query == b"size=medium&count=30"
+    read = agental.headroom()
+    assert (read.now.running_units, read.now.free_burst_units, read.now.next_start[2].size, read.from_, read.step) == (100, 100, "medium", "2026-11-13T00:00:00.000Z", "10m")
+    assert (read.series[0].peak_running_mb, read.bursts[0].ended_at, read.bursts[0].by_source[0].name, read.bursts[0].refused) == (8192, None, "acme/web", {"running_count": 2})
+    assert (read.refused.total, read.refused.by_reason[0].reason, read.speed.p50_ms, read.peak_at) == (1, "running_count", 900, "2026-11-13T00:05:00.000Z")
+    assert (script.sent[0].method, script.sent[0].url.path, script.sent[0].url.query) == ("GET", "/v1/headroom", b"")
+    agental.headroom(from_=datetime(2026, 11, 6, tzinfo=timezone.utc), to="2026-11-13T00:00:00Z", step="hour")
+    assert script.sent[1].url.params["from"].startswith("2026-11-06T00:00:00")
+    assert (script.sent[1].url.params["to"], script.sent[1].url.params["step"]) == ("2026-11-13T00:00:00Z", "hour")
 
-    assert agental.set_burst_budget(0).budget_micros == 0
-    assert (script.sent[2].method, script.sent[2].url.path, script.body(2)) == ("PUT", "/v1/burst/budget", {"budgetMicros": 0})
+    assert agental.set_headroom_budget(0).budget_micros == 0
+    assert (script.sent[2].method, script.sent[2].url.path, script.body(2)) == ("PUT", "/v1/headroom/budget", {"budgetMicros": 0})
     # Setting a budget twice sets it once, so a lost answer is sent again.
-    assert agental.set_burst_budget(None).budget_set is False
+    assert agental.set_headroom_budget(None).budget_set is False
     assert script.body(4) == {"budgetMicros": None}
 
 
@@ -778,7 +808,11 @@ def test_a_create_fork_and_start_send_the_most_they_may_pay_and_say_what_they_pa
 
 def burst_refusal(code: str, fee: int, after: int | None) -> httpx.Response:
     headers = {} if after is None else {"Retry-After": str(after)}
-    return answer(429, {"error": {"code": code, "message": f"{code} it is", "feeMicros": fee, "retryAfterSeconds": after}}, **headers)
+    return answer(
+        429,
+        {"error": {"code": code, "message": f"{code} it is", "feeMicros": fee, "retryAfterSeconds": after, "refusedLastHour": 3, "headroomUrl": "https://console.agental.io/headroom"}},
+        **headers,
+    )
 
 
 def test_a_start_refused_for_its_burst_says_what_it_would_cost_and_when_it_would_cost_nothing() -> None:
@@ -790,9 +824,10 @@ def test_a_start_refused_for_its_burst_says_what_it_would_cost_and_when_it_would
     with pytest.raises(ApiError) as running:
         agental.sandboxes.create()
     assert (running.value.code, running.value.fee_micros, running.value.retry_after_seconds) == ("running_limit_reached", 0, None)
+    assert (running.value.refused_last_hour, running.value.headroom_url) == (3, "https://console.agental.io/headroom")
     with pytest.raises(ApiError) as other:
         agental.sandboxes.create()
-    assert (other.value.fee_micros, other.value.retry_after_seconds) == (None, None)
+    assert (other.value.fee_micros, other.value.retry_after_seconds, other.value.refused_last_hour, other.value.headroom_url) == (None, None, None, None)
     assert len(script.sent) == 3
 
 
@@ -841,19 +876,19 @@ def test_the_client_that_awaits_waits_out_a_burst_and_reads_the_burst_the_same(m
         slept.append(seconds)
 
     monkeypatch.setattr("agental._async.asyncio.sleep", no_sleep)
-    script = Script(answer(200, burst()), burst_refusal("burst_fee_too_high", 64_000, 12), answer(201, sandbox(), **{"Agental-Burst-Fee": "0"}), answer(200, burst(spentMicros=0)))
+    script = Script(answer(200, headroom()), burst_refusal("burst_fee_too_high", 64_000, 12), answer(201, sandbox(), **{"Agental-Burst-Fee": "0"}), answer(200, burst(spentMicros=0)))
 
     async def main() -> None:
         client = httpx.AsyncClient(transport=httpx.MockTransport(script))
         async with AsyncAgental("key_test", base_url="https://api.test", retry_delay=0, poll_interval=0, http_client=client) as agental:
-            assert (await agental.burst()).budget_micros == 50_000_000
+            assert (await agental.headroom()).now.budget_micros == 50_000_000
             box = await agental.sandboxes.create(max_burst_fee_micros=0, max_burst_wait=30)
             assert box.burst_fee_micros == 0
-            assert (await agental.set_burst_budget(None)).spent_micros == 0
+            assert (await agental.set_headroom_budget(None)).spent_micros == 0
 
     asyncio.run(main())
     assert slept == [12]
-    assert [(each.method, each.url.path) for each in script.sent] == [("GET", "/v1/burst"), ("POST", "/v1/sandboxes"), ("POST", "/v1/sandboxes"), ("PUT", "/v1/burst/budget")]
+    assert [(each.method, each.url.path) for each in script.sent] == [("GET", "/v1/headroom"), ("POST", "/v1/sandboxes"), ("POST", "/v1/sandboxes"), ("PUT", "/v1/headroom/budget")]
 
 
 def test_the_usage_and_the_policy_say_what_mail_there_was_and_whether_there_is_any() -> None:

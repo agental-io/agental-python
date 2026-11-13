@@ -401,20 +401,28 @@ The free plan makes tiny and small sandboxes, the $100 plan medium ones too, and
 
 ## How many you run, and how fast you start them
 
-Each plan runs so many small sandboxes at once, its running count, and starts so many at once for nothing, its free burst: a tiny counts half, a medium 2 and a large 4. The free plan runs 20 and bursts 20, the $100 plan 100 and 100, the $500 plan 600 and 200, the $2000 plan 2000 and 400. An account on the free plan runs and starts at most 2 small sandboxes at once until it has paid for something, a top-up of any size (`burst().unpaid`). `prices().tiers` gives each plan's `running_units` and `free_burst_units`, `prices().free.unpaid_units` the free plan's count before it has paid, and `prices().burst_fee` how fees are worked out. Each start adds its memory to a burst meter that halves every 15 minutes. Starting faster than the free burst is never refused for speed: it costs a burst fee, which grows with how far over the meter goes.
+Each plan runs so many small sandboxes at once, its running count, and starts so many at once for nothing, its free burst: a tiny counts half, a medium 2 and a large 4. The free plan runs 20 and bursts 20, the $100 plan 100 and 100, the $500 plan 600 and 200, the $2000 plan 2000 and 400. An account on the free plan runs and starts at most 2 small sandboxes at once until it has paid for something, a top-up of any size (`headroom().now.unpaid`). `prices().tiers` gives each plan's `running_units` and `free_burst_units`, `prices().free.unpaid_units` the free plan's count before it has paid, and `prices().burst_fee` how fees are worked out. Each start adds its memory to a burst meter that halves every 15 minutes. Starting faster than the free burst is never refused for speed: it costs a burst fee, which grows with how far over the meter goes.
+
+`headroom()` says how close the account runs to these limits: `now`, where it stands, and over a range (today, UTC, unless `from_` and `to` say otherwise, 90 days at most) what it ran against its running count, each burst (a stretch when the meter was over the free burst, so every start in it paid a fee), what did not start and why, and how fast what started ran.
 
 ```python
-burst = agental.burst()
-print(burst.running_units, burst.free_burst_units)  # 100 100
-print(burst.free_now_mb / 4096)  # small sandboxes you may start now for nothing
-print(burst.spent_micros, burst.budget_micros)  # burst fees this month, and the most you spend on them
+headroom = agental.headroom()
+now = headroom.now
+print(now.running_mb / 4096, now.running_units)  # small sandboxes running, of 100
+print(now.free_now_mb / 4096)  # small sandboxes you may start now for nothing
+print(now.spent_micros, now.budget_micros)  # burst fees this month, and the most you spend on them
+print(now.next_start)  # what one sandbox of each size would cost to start now
+print(headroom.at_running_count_ms / 60_000)  # minutes today at the running count
+if headroom.bursts:
+    print(headroom.bursts[0].started_at, headroom.bursts[0].ended_at)  # the newest burst; ended_at is None while it goes on
+print(headroom.refused.total, headroom.refused.by_reason)  # what did not start today: running_count, budget, fee_cap, room or other
 
-# What starting 30 medium ones now would cost, and in how many seconds it would cost nothing.
-quote = agental.burst(size="medium", count=30).quote
-print(quote.fee_micros, quote.free_in_seconds)
+# The last week, read every hour.
+week = agental.headroom(from_=datetime.now(timezone.utc) - timedelta(days=7), step="hour")
+print([point.peak_running_mb / 4096 for point in week.series])
 
 # Spend at most $10 a month on burst fees; 0 refuses every start that would cost one, None puts back the default ($50).
-agental.set_burst_budget(10_000_000)
+agental.set_headroom_budget(10_000_000)
 ```
 
 A create, fork or start takes `max_burst_fee_micros`, the most it may pay, and the sandbox's `burst_fee_micros` says what it paid:
@@ -425,7 +433,7 @@ print(sandbox.burst_fee_micros)  # 0 within the free burst
 sandbox.start(max_burst_fee_micros=0, max_burst_wait=300)  # free, waiting up to 5 minutes for it to be
 ```
 
-Where `enforced` is True, a start is refused with an `ApiError` of status 429 and one of these codes, all in `BURST_REFUSALS` (`from agental import BURST_REFUSALS`). `fee_micros` says what it would have cost and `retry_after_seconds` when it would cost nothing, or None when waiting would not help:
+Where `now.enforced` is True, a start is refused with an `ApiError` of status 429 and one of these codes, all in `BURST_REFUSALS` (`from agental import BURST_REFUSALS`). `fee_micros` says what it would have cost and `retry_after_seconds` when it would cost nothing, or None when waiting would not help; `refused_last_hour` how many creates and starts were refused with the same code in the last hour, this one with them, and `headroom_url` the console's page that shows them all:
 
 - `running_limit_reached`: the account already runs its plan's running count. Stop something first.
 - `burst_fee_too_high`: the start would cost more than `max_burst_fee_micros`.
