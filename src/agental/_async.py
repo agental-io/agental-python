@@ -109,7 +109,7 @@ _USER_AGENT = f"agental-python/{__version__}"
 _UNSET: Any = object()
 
 #: What a terminal's WebSocket logs to. Never at DEBUG, where websockets would log the handshake's
-#: headers, and with them the ticket.
+#: headers, and with them the ticket and its verifier.
 _TERMINAL_LOG = logging.getLogger("agental.terminal")
 _TERMINAL_LOG.setLevel(logging.INFO)
 
@@ -280,9 +280,14 @@ class AsyncTerminal:
 
 async def _open_terminal(http: _Http, path: str, size: dict[str, int]) -> AsyncTerminal:
     """Asks for a ticket, and opens the WebSocket with it as a subprotocol, never in the URL."""
-    answer = await http.run(_core.one(Call("POST", f"{path}/terminal", body=size)))
+    verifier, challenge = _core.terminal_pkce()
+    answer = await http.run(_core.one(Call("POST", f"{path}/terminal", body={**size, "challenge": challenge})))
     url = _core.websocket_url(http.config.base_url, answer["path"])
-    protocols = [Subprotocol(_core.TERMINAL_PROTOCOL), Subprotocol(_core.TICKET_PROTOCOL_PREFIX + str(answer["ticket"]))]
+    protocols = [
+        Subprotocol(_core.TERMINAL_PROTOCOL),
+        Subprotocol(_core.TICKET_PROTOCOL_PREFIX + str(answer["ticket"])),
+        Subprotocol(_core.VERIFIER_PROTOCOL_PREFIX + verifier),
+    ]
     try:
         connection = await _ws.aconnect(url, subprotocols=protocols, user_agent_header=_USER_AGENT, open_timeout=30, logger=_TERMINAL_LOG)
     except InvalidStatus as error:

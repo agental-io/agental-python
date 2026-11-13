@@ -9,6 +9,7 @@ answer is written once.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import re
@@ -395,6 +396,21 @@ class StreamReader:
 TERMINAL_PROTOCOL = "agental.terminal.v1"
 #: The subprotocol a ticket is sent as: this, then the ticket. A ticket is never put in a URL.
 TICKET_PROTOCOL_PREFIX = "ticket."
+#: The subprotocol the ticket's verifier is sent as: this, then the verifier.
+VERIFIER_PROTOCOL_PREFIX = "verifier."
+
+
+def terminal_pkce() -> tuple[str, str]:
+    """A verifier, kept in memory alone, and its S256 challenge (RFC 7636), which a ticket is asked with.
+
+    The ticket then opens the terminal only with the verifier, which no answer carries, from whatever
+    address the WebSocket leaves by: not every network sends a request and a WebSocket out by one.
+    """
+    verifier = base64.urlsafe_b64encode(os.urandom(32)).rstrip(b"=").decode("ascii")
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).rstrip(b"=").decode("ascii")
+    return verifier, challenge
+
+
 #: The most the API takes in one message of what is typed: longer input is sent in pieces this size.
 TERMINAL_INPUT_BYTES = 64 * 1024
 

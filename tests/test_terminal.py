@@ -9,7 +9,10 @@ test/terminal.test.ts.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
+import re
 import threading
 from collections.abc import Iterator
 from typing import Any
@@ -115,7 +118,9 @@ def test_a_terminal_types_resizes_and_ends_with_the_shells_exit(stand_in: StandI
         terminal.write(b"exit 3")
         out = b"".join(terminal)
         assert terminal.started
-    assert json.loads(tickets.posted[0].content) == {"cols": 120, "rows": 32}
+    asked = json.loads(tickets.posted[0].content)
+    assert {"cols": asked["cols"], "rows": asked["rows"]} == {"cols": 120, "rows": 32}
+    assert re.fullmatch(r"[A-Za-z0-9_-]{43}", asked["challenge"])
     assert tickets.posted[0].url.path == PATH
     assert tickets.posted[0].headers["authorization"] == "Bearer key_test"
     assert out == b"echo hi\nsize 132x40"
@@ -124,14 +129,21 @@ def test_a_terminal_types_resizes_and_ends_with_the_shells_exit(stand_in: StandI
 
 
 def test_the_ticket_goes_only_as_a_subprotocol(stand_in: StandIn) -> None:
-    sandbox = client(stand_in.base_url, Tickets()).sandboxes.get(ID)
+    tickets = Tickets()
+    sandbox = client(stand_in.base_url, tickets).sandboxes.get(ID)
     with sandbox.terminal() as terminal:
         terminal.write("exit 0")
         assert terminal.wait().exit_code == 0
     path, headers = stand_in.handshakes[0]
     assert path == PATH
     assert TICKET not in path
-    assert headers["Sec-WebSocket-Protocol"] == f"agental.terminal.v1, ticket.{TICKET}"
+    # The ticket, then the verifier of the challenge it was asked with (RFC 7636, S256): no answer carries the verifier.
+    terminal_protocol, ticket, verifier = headers["Sec-WebSocket-Protocol"].split(", ")
+    assert (terminal_protocol, ticket) == ("agental.terminal.v1", f"ticket.{TICKET}")
+    assert verifier.startswith("verifier.")
+    challenge = json.loads(tickets.posted[0].content)["challenge"]
+    digest = hashlib.sha256(verifier.removeprefix("verifier.").encode()).digest()
+    assert base64.urlsafe_b64encode(digest).rstrip(b"=").decode() == challenge
     assert "Origin" not in headers
     assert headers["User-Agent"].startswith("agental-python/")
 
