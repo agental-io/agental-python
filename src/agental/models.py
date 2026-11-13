@@ -1613,11 +1613,12 @@ class BurstFee:
 
     #: How long an account's burst meter takes to fall by half. Each start adds its memory to it.
     half_life_minutes: int
-    #: What a GiB started costs once the meter is at twice the free burst, in millionths of a US dollar. Nothing at
-    #: the free burst's edge, rising in a straight line with how far over the meter goes.
+    #: What each GiB of a start past the free burst costs, in millionths of a US dollar.
     fee_micros_per_gib: int
     #: What an account spends on burst fees in a month at most unless it sets another budget: set_burst_budget().
     default_budget_micros: int
+    #: The most one start costs in burst fees, in hours of its size's list price. None from an API older than it.
+    fee_cap_hours: int | None = None
 
 
 @dataclass
