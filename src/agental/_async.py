@@ -87,6 +87,8 @@ from .models import (
     TeamRole,
     Telemetry,
     TelemetryTest,
+    ClaudeConnection,
+    ClaudeSession,
     RunsOnRepositories,
     RunsOnRepository,
     RunsOnSandbox,
@@ -2214,6 +2216,76 @@ class AsyncAgental:
         """Removes your collector, with its headers, and nothing more is sent to it. When none is set it raises an ApiError with the status 404."""
         await self._http.run(_core.one(Call("DELETE", "/v1/telemetry")))
 
+    async def list_claude_connections(self) -> list[ClaudeConnection]:
+        """The Claude Managed Agents self-hosted environments connected to your account.
+
+        Each session of one runs its tool calls in a sandbox of your own. Their keys and
+        signing secrets are never shown. Only where policy() says managed_agents.
+        """
+        body = await self._http.run(_core.one(Call("GET", "/v1/claude/connections", replay=True)))
+        return [build(ClaudeConnection, each) for each in body["data"]]
+
+    async def connect_claude(
+        self,
+        environment_id: str,
+        environment_key: str,
+        *,
+        webhook_secret: str | None = None,
+        template_id: str | None = None,
+        keep_days: int | None = None,
+    ) -> ClaudeConnection:
+        """Connects a self-hosted environment from the Claude Console.
+
+        environment_key is the environment's key, and webhook_secret its webhook's signing
+        secret, for a turn to start at once: both are kept sealed and never shown again, and
+        the key never goes into a sandbox. Each session gets a sandbox on template_id (the
+        account's default when None), stopped between turns and deleted once it has slept
+        keep_days (7). Set the answer's webhook_url as the environment's webhook for
+        session.status_run_started in the Claude Console.
+        """
+        body: dict[str, Any] = {"environmentId": environment_id, "environmentKey": environment_key}
+        if webhook_secret is not None:
+            body["webhookSecret"] = webhook_secret
+        if template_id is not None:
+            body["templateId"] = template_id
+        if keep_days is not None:
+            body["keepDays"] = keep_days
+        answer = await self._http.run(_core.one(Call("POST", "/v1/claude/connections", body=body)))
+        return build(ClaudeConnection, answer["connection"])
+
+    async def get_claude_connection(self, connection_id: str) -> ClaudeConnection:
+        """One connected environment."""
+        answer = await self._http.run(_core.one(Call("GET", f"/v1/claude/connections/{quote(connection_id, safe='')}", replay=True)))
+        return build(ClaudeConnection, answer["connection"])
+
+    async def list_claude_sessions(self, connection_id: str) -> list[ClaudeSession]:
+        """The sessions of a connected environment that have run here, the latest active first.
+
+        Each says its sandbox, whether it runs or sleeps, when a sleeping one's sandbox is
+        deleted, and why its last turn was not served.
+        """
+        body = await self._http.run(_core.one(Call("GET", f"/v1/claude/connections/{quote(connection_id, safe='')}/sessions", replay=True)))
+        return [build(ClaudeSession, each) for each in body["data"]]
+
+    async def update_claude_connection(
+        self,
+        connection_id: str,
+        *,
+        environment_key: str = _UNSET,
+        webhook_secret: str | None = _UNSET,
+        template_id: str | None = _UNSET,
+        keep_days: int = _UNSET,
+    ) -> ClaudeConnection:
+        """Changes a connection: a new key or signing secret (None forgets it), another template (None for the default), or keep_days. What is not given stays as it was."""
+        pairs = (("environmentKey", environment_key), ("webhookSecret", webhook_secret), ("templateId", template_id), ("keepDays", keep_days))
+        body = {key: value for key, value in pairs if value is not _UNSET}
+        answer = await self._http.run(_core.one(Call("PATCH", f"/v1/claude/connections/{quote(connection_id, safe='')}", body=body, replay=True)))
+        return build(ClaudeConnection, answer["connection"])
+
+    async def disconnect_claude(self, connection_id: str) -> None:
+        """Disconnects an environment: its key and signing secret are forgotten, and no more of its work is claimed. Its sessions' sandboxes are left as they are."""
+        await self._http.run(_core.one(Call("DELETE", f"/v1/claude/connections/{quote(connection_id, safe='')}")))
+
     async def runs_on_repositories(self) -> RunsOnRepositories:
         """GitHub Actions jobs on sandboxes: each repository's pool, how many sandboxes of each size it keeps and the template they are made on.
 
@@ -2262,8 +2334,10 @@ class AsyncAgental:
         """Adds a webhook, and gives its signing secret in signing_secret, the one time it is given.
 
         url is posted each event it takes, and has to be on the public internet. events names
-        the kinds it takes, such as sandbox.stopped, or "*" for every one and any added later,
-        which is what it takes when events is left out. Each post's X-Agental-Signature is
+        the kinds it takes, such as sandbox.stopped or headroom.burst_ended, a group of them by
+        its name and .*, such as "headroom.*", which takes the group's kinds added later too, or
+        "*" for every one and any added later, which is what it takes when events is left out.
+        A * anywhere else is refused. Each post's X-Agental-Signature is
         checked against the secret with verify_webhook. It is sent once, so a lost answer is
         not sent again.
         """

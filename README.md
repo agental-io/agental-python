@@ -571,7 +571,7 @@ agental.rotate_webhook_secret(hook.id)  # a new signing_secret; the old one stop
 agental.delete_webhook(hook.id)
 ```
 
-`events` takes the kinds of event, such as `sandbox.started`, `sandbox.stopped` and `sandbox.error`. `sandbox.auto_stop_set` is a running sandbox's stop moved: its `data` has `autoStopAt`, `previousAutoStopAt`, and `by`, `account` or `sandbox`.
+`events` takes the kinds of event, such as `sandbox.started`, `sandbox.stopped` and `sandbox.error`. `sandbox.auto_stop_set` is a running sandbox's stop moved: its `data` has `autoStopAt`, `previousAutoStopAt`, and `by`, `account` or `sandbox`. A group by its name and `.*`, such as `headroom.*` or `sandbox.*`, takes every kind of the group and any added to it later; a `*` anywhere else is refused. The `headroom.*` events are your organization's, about no sandbox: `headroom.burst_started` and `headroom.burst_ended` (a stretch over the free burst, with what it cost), `headroom.refused` (starts refused, at most one a minute for each reason), `headroom.running_count_reached`, `headroom.budget_threshold` (burst fees past 80% of the month's budget) and `headroom.budget_reached` (the budget refused a start). Money is in micros of a dollar, memory in MB.
 
 Check each post your server receives:
 

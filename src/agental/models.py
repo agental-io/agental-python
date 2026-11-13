@@ -882,6 +882,8 @@ class Policy:
     console_url: str | None = None
     #: Whether a sandbox's web traffic can leave through a residential address here, at $3 a GB. False from an API older than that.
     residential_egress: bool = False
+    #: Whether Claude Managed Agents' self-hosted environments can be connected here, so that their sessions' tool calls run in this account's sandboxes. False from an API older than that.
+    managed_agents: bool = False
 
 
 @dataclass
@@ -1469,6 +1471,45 @@ class Telemetry:
     last_error: TelemetryError | None
     created_at: str
     updated_at: str
+
+
+@dataclass
+class ClaudeConnection:
+    """A Claude Managed Agents self-hosted environment connected to your account: its sessions' tool calls run in your sandboxes. Its key and signing secret are never shown."""
+
+    id: str
+    #: The self-hosted environment at Anthropic.
+    environment_id: str
+    #: The template each session's sandbox is made from. None for the account's default, and for a template deleted since.
+    template_id: str | None
+    #: How many days a sleeping session's stopped sandbox is kept before it is deleted.
+    keep_days: int
+    #: Whether the webhook's signing secret is kept. Without it sessions are found by a pass every minute alone.
+    has_webhook_secret: bool
+    #: The address to give the Claude Console as the environment's webhook, for session.status_run_started.
+    webhook_url: str
+    created_at: str
+    updated_at: str
+
+
+@dataclass
+class ClaudeSession:
+    """A session of a connected environment that has run here: its sandbox, whether it runs or sleeps, and why its last turn was not served."""
+
+    session_id: str
+    #: The session's sandbox, or None while one is being made.
+    sandbox_id: str | None
+    #: The sandbox's status now, or None where it was deleted.
+    sandbox_status: str | None
+    #: running while its worker may be up; sleeping once its sandbox is stopped, until its next turn.
+    state: str
+    #: When its last turn's worker was started.
+    last_turn_at: str | None
+    last_active_at: str
+    #: When its sandbox is deleted, while it sleeps.
+    deletes_at: str | None
+    #: Why its last turn was not served, or None.
+    error: str | None
 
 
 @dataclass

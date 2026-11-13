@@ -2261,3 +2261,43 @@ def test_residential_egress_is_read_and_set_on_the_account_a_sandbox_and_a_templ
     assert held.egress() == Egress("box")
     assert (script.sent[10].method, script.sent[10].url.path) == ("GET", "/v1/templates/tpl_0000000000000002/egress")
     assert len(script.sent) == 11
+
+
+CLAUDE = {
+    "id": "ccn_7f3a91c2d04e5b18",
+    "environmentId": "env_01UykHXsjAbCdEfGhIjKlMnO",
+    "templateId": None,
+    "keepDays": 7,
+    "hasWebhookSecret": True,
+    "webhookUrl": "https://agental.io/v1/claude/webhook/ccn_7f3a91c2d04e5b18",
+    "createdAt": "2026-11-13T20:00:00.000Z",
+    "updatedAt": "2026-11-13T20:00:00.000Z",
+}
+
+
+def test_claude_connections_are_connected_read_changed_and_disconnected() -> None:
+    agental, script = scripted(
+        answer(201, {"connection": CLAUDE}),
+        answer(200, {"data": [CLAUDE]}),
+        answer(200, {"connection": {**CLAUDE, "keepDays": 3, "hasWebhookSecret": False}}),
+        httpx.Response(204),
+    )
+    made = agental.connect_claude("env_01UykHXsjAbCdEfGhIjKlMnO", "sk-ant-oat01-key", webhook_secret="whsec_s")
+    assert (script.sent[0].method, script.sent[0].url.path) == ("POST", "/v1/claude/connections")
+    assert script.body(0) == {"environmentId": "env_01UykHXsjAbCdEfGhIjKlMnO", "environmentKey": "sk-ant-oat01-key", "webhookSecret": "whsec_s"}
+    assert (made.id, made.template_id, made.has_webhook_secret) == ("ccn_7f3a91c2d04e5b18", None, True)
+    assert [one.environment_id for one in agental.list_claude_connections()] == ["env_01UykHXsjAbCdEfGhIjKlMnO"]
+    changed = agental.update_claude_connection(made.id, keep_days=3, webhook_secret=None)
+    # What is not given is not sent; None is sent, as forgetting the secret.
+    assert script.body(2) == {"webhookSecret": None, "keepDays": 3}
+    assert (changed.keep_days, changed.has_webhook_secret) == (3, False)
+    agental.disconnect_claude(made.id)
+    assert (script.sent[3].method, script.sent[3].url.path) == ("DELETE", "/v1/claude/connections/ccn_7f3a91c2d04e5b18")
+
+
+def test_a_connections_sessions_are_listed() -> None:
+    session = {"sessionId": "sesn_01", "sandboxId": "sbx_1", "sandboxStatus": "stopped", "state": "sleeping", "lastTurnAt": "2026-11-13T20:00:00.000Z", "lastActiveAt": "2026-11-13T20:05:00.000Z", "deletesAt": "2026-11-20T20:05:00.000Z", "error": None}
+    agental, script = scripted(answer(200, {"data": [session]}))
+    listed = agental.list_claude_sessions("ccn_7f3a91c2d04e5b18")
+    assert (script.sent[0].method, script.sent[0].url.path) == ("GET", "/v1/claude/connections/ccn_7f3a91c2d04e5b18/sessions")
+    assert (listed[0].session_id, listed[0].state, listed[0].deletes_at) == ("sesn_01", "sleeping", "2026-11-20T20:05:00.000Z")
