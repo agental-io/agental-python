@@ -1960,3 +1960,54 @@ class AutoReload:
     """The auto-reload as it is now: set, or None while it is off."""
 
     auto_reload: AutoReloadSetting | None
+
+
+@dataclass
+class BillingInvoice:
+    """An invoice of the account's, as the payment provider keeps it. Amounts are millionths of its currency."""
+
+    id: str
+    #: The number on it. None until it is finalized.
+    number: str | None
+    created_at: str
+    #: open: not paid yet. paid. void: cancelled, nothing owed. uncollectible: written off.
+    status: str
+    #: What it was for, as the invoice says it.
+    description: str | None
+    currency: str
+    #: What it came to, tax included.
+    total_micros: int
+    tax_micros: int
+    amount_paid_micros: int
+    #: The payment provider's page for it, where an open one is paid. None for an admin, who is not given it.
+    page_url: str | None
+    #: Its PDF. None for an admin, as page_url is.
+    pdf_url: str | None
+
+
+@dataclass
+class BillingInvoices:
+    """A page of the account's invoices, newest first."""
+
+    invoices: list[BillingInvoice]
+    #: What to pass as starting_after for the page after this one. None on the last.
+    next: str | None
+
+
+@dataclass
+class PaymentCard:
+    """The card the account pays with: its brand, last four, expiry and wallet, never its number."""
+
+    brand: str | None
+    last4: str | None
+    exp_month: int | None
+    exp_year: int | None
+    #: apple_pay, google_pay or another wallet it is kept in; None for a card typed in.
+    wallet: str | None
+
+
+@dataclass
+class BillingCard:
+    """The card the account pays with now, or None where it has none saved."""
+
+    card: PaymentCard | None

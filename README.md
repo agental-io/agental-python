@@ -397,6 +397,15 @@ An account starts on the free plan: nothing a month, and what it runs is paid fr
 
 `set_auto_reload(dollars)` has the card saved at the last purchase charged for a top-up of that much, with tax, when the month's credits and the top-ups run out, and the credits added at once, before any sandbox is stopped: at most three times a day, and not again for a day after a card that would not pay. `set_auto_reload(None)` turns it off, and `billing().auto_reload` says how it is set. It needs a card saved first: `billing().can_auto_reload` says whether it can be set, and the call answers `409 no_card` until then.
 
+```python
+page = agental.invoices(limit=10)
+for invoice in page.invoices:
+    print(invoice.number, invoice.status, invoice.total_micros)
+card = agental.card().card
+```
+
+`invoices()` gives the account's invoices from the payment provider, newest first, 25 to a page unless `limit` says otherwise: a plan's months, top-ups and auto-reloads, each with its number, state, what it was for, what it came to in millionths, and its page and PDF (`None` for an admin). Pass a page's `next` as `starting_after` for the page after it, or let `all_invoices()` read them all. `card()` gives the card the account pays with now: brand, last four, expiry and wallet, or `None` where none is saved.
+
 The free plan makes tiny and small sandboxes, the $100 plan medium ones too, and the $500 and $2000 plans every size: each plan's `sizes` in `prices().tiers` says which. `prices().plans`, despite its name, is the sizes and what an hour of each costs. A create, fork or template start of a size the plan does not make raises an `ApiError` with the status 402 and the code `size_not_on_plan`, whose message names the plan that makes it. A sandbox made before a change of plan still starts at its own size.
 
 ## How many you run, and how fast you start them

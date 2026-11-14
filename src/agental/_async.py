@@ -35,6 +35,9 @@ from .models import (
     EgressAccount,
     Catalog,
     AutoReload,
+    BillingCard,
+    BillingInvoice,
+    BillingInvoices,
     Checkout,
     Command,
     CreateApiKey,
@@ -2083,6 +2086,30 @@ class AsyncAgental:
         billing().can_auto_reload says whether it can be set.
         """
         return build(AutoReload, await self._http.run(_core.one(Call("PUT", "/v1/billing/auto-reload", body={"dollars": dollars}))))
+
+    async def invoices(self, *, limit: int | None = None, starting_after: str | None = None) -> BillingInvoices:
+        """The account's invoices, newest first, read from the payment provider: a plan's months, top-ups and auto-reloads, drafts left out.
+
+        25 unless limit says otherwise, 100 at most. Pass a page's next as starting_after for the
+        page after it. An admin is given no page_url or pdf_url.
+        """
+        query = {"limit": None if limit is None else str(limit), "startingAfter": starting_after}
+        return build(BillingInvoices, await self._http.run(_core.one(Call("GET", "/v1/billing/invoices", query=query, replay=True))))
+
+    async def all_invoices(self, *, limit: int | None = None) -> AsyncIterator[BillingInvoice]:
+        """Every invoice, newest first. They are read a page at a time as they are asked for, limit to a page."""
+        starting_after: str | None = None
+        while True:
+            page = await self.invoices(limit=limit, starting_after=starting_after)
+            for invoice in page.invoices:
+                yield invoice
+            if page.next is None:
+                return
+            starting_after = page.next
+
+    async def card(self) -> BillingCard:
+        """The card the account pays with now, the one an auto-reload charges: its brand, last four, expiry and wallet, or None where none is saved."""
+        return build(BillingCard, await self._http.run(_core.one(Call("GET", "/v1/billing/card", replay=True))))
 
     async def email(self) -> AccountEmail:
         """The account's mail: the handle every address of its sandboxes carries, what its plan allows, and what it has had of that today."""

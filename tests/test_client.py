@@ -1259,6 +1259,44 @@ def test_the_auto_reload_is_set_and_turned_off_by_one_call_which_sends_the_dolla
     assert script.body(1) == {"dollars": None}
 
 
+def test_the_invoices_are_read_a_page_at_a_time_and_the_card_in_one_call() -> None:
+    invoice = {
+        "id": "in_2",
+        "number": "AG-0002",
+        "createdAt": "2026-11-09T10:00:00.000Z",
+        "status": "paid",
+        "description": "agental credits",
+        "currency": "usd",
+        "totalMicros": 100_000_000,
+        "taxMicros": 0,
+        "amountPaidMicros": 100_000_000,
+        "pageUrl": None,
+        "pdfUrl": None,
+    }
+    card = {"card": {"brand": "visa", "last4": "4242", "expMonth": 8, "expYear": 2028, "wallet": None}}
+    agental, script = scripted(
+        answer(200, {"invoices": [invoice], "next": "in_2"}),
+        answer(200, {"invoices": [], "next": None}),
+        answer(200, card),
+        answer(200, {"card": None}),
+        answer(200, {"invoices": [invoice], "next": "in_2"}),
+        answer(200, {"invoices": [], "next": "in_1"}),
+        answer(200, {"invoices": [{**invoice, "id": "in_0"}], "next": None}),
+    )
+    page = agental.invoices(limit=1)
+    assert ([one.id for one in page.invoices], page.next, page.invoices[0].total_micros) == (["in_2"], "in_2", 100_000_000)
+    assert (script.sent[0].method, script.sent[0].url.path, dict(script.sent[0].url.params)) == ("GET", "/v1/billing/invoices", {"limit": "1"})
+    assert agental.invoices(starting_after="in_2").next is None
+    assert dict(script.sent[1].url.params) == {"startingAfter": "in_2"}
+    paying = agental.card()
+    assert paying.card is not None and (paying.card.brand, paying.card.last4, paying.card.exp_year) == ("visa", "4242", 2028)
+    assert script.sent[2].url.path == "/v1/billing/card"
+    assert agental.card().card is None
+    # A page may come back empty, drafts being left out, and still have a next: every page is read to the last.
+    assert [one.id for one in agental.all_invoices(limit=1)] == ["in_2", "in_0"]
+    assert dict(script.sent[6].url.params) == {"limit": "1", "startingAfter": "in_1"}
+
+
 def test_a_desktop_is_turned_on_with_the_screen_it_is_given_read_and_turned_off() -> None:
     on = {"enabled": True, "enabledAt": "2026-10-14T08:00:00.000Z", "running": True, "width": 1280, "height": 800, "display": ":0", "url": "https://3f9c2a17b8d04e6a51c0.agental.site/vnc.html?autoconnect=1&resize=scale&reconnect=1"}
     off = {"enabled": False, "enabledAt": None, "running": False, "width": None, "height": None, "display": None, "url": None}
