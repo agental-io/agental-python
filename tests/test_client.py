@@ -1282,6 +1282,7 @@ def test_the_invoices_are_read_a_page_at_a_time_and_the_card_in_one_call() -> No
         answer(200, {"invoices": [invoice], "next": "in_2"}),
         answer(200, {"invoices": [], "next": "in_1"}),
         answer(200, {"invoices": [{**invoice, "id": "in_0"}], "next": None}),
+        answer(200, {"details": {"email": "billing@example.com", "name": "Example Ltd", "address": {"line1": "1 Vitosha Blvd", "line2": None, "city": "Sofia", "postalCode": "1000", "state": None, "country": "BG"}, "taxIds": [{"type": "eu_vat", "value": "BG123456789", "verification": "verified"}]}}),
     )
     page = agental.invoices(limit=1)
     assert ([one.id for one in page.invoices], page.next, page.invoices[0].total_micros) == (["in_2"], "in_2", 100_000_000)
@@ -1295,6 +1296,10 @@ def test_the_invoices_are_read_a_page_at_a_time_and_the_card_in_one_call() -> No
     # A page may come back empty, drafts being left out, and still have a next: every page is read to the last.
     assert [one.id for one in agental.all_invoices(limit=1)] == ["in_2", "in_0"]
     assert dict(script.sent[6].url.params) == {"limit": "1", "startingAfter": "in_1"}
+    details = agental.billing_details().details
+    assert details is not None and details.address is not None
+    assert (details.name, details.address.postal_code, details.tax_ids[0].value) == ("Example Ltd", "1000", "BG123456789")
+    assert script.sent[7].url.path == "/v1/billing/details"
 
 
 def test_a_desktop_is_turned_on_with_the_screen_it_is_given_read_and_turned_off() -> None:

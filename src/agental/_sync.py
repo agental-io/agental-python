@@ -36,6 +36,7 @@ from .models import (
     Catalog,
     AutoReload,
     BillingCard,
+    BillingDetails,
     BillingInvoice,
     BillingInvoices,
     Checkout,
@@ -2110,6 +2111,10 @@ class Agental:
     def card(self) -> BillingCard:
         """The card the account pays with now, the one an auto-reload charges: its brand, last four, expiry and wallet, or None where none is saved."""
         return build(BillingCard, self._http.run(_core.one(Call("GET", "/v1/billing/card", replay=True))))
+
+    def billing_details(self) -> BillingDetails:
+        """Who the account's invoices are made out to: the email they go to, the name and address on them, and its tax ids. None before it has bought anything. An owner's to read: an admin is refused with 403."""
+        return build(BillingDetails, self._http.run(_core.one(Call("GET", "/v1/billing/details", replay=True))))
 
     def email(self) -> AccountEmail:
         """The account's mail: the handle every address of its sandboxes carries, what its plan allows, and what it has had of that today."""

@@ -2011,3 +2011,45 @@ class BillingCard:
     """The card the account pays with now, or None where it has none saved."""
 
     card: PaymentCard | None
+
+
+@dataclass
+class BillingAddress:
+    """The address on the account's invoices. country is two letters, as BG."""
+
+    line1: str | None
+    line2: str | None
+    city: str | None
+    postal_code: str | None
+    state: str | None
+    country: str | None
+
+
+@dataclass
+class TaxId:
+    """A tax id on the account's invoices, as an EU VAT number."""
+
+    #: eu_vat, gb_vat and the like.
+    type: str
+    value: str
+    #: verified, pending or unverified, as the tax authority answered; None where it is not checked.
+    verification: str | None
+
+
+@dataclass
+class BillingContact:
+    """Who the account's invoices are made out to."""
+
+    #: Where invoices and receipts are sent.
+    email: str | None
+    #: The name on invoices: a company's, or a person's.
+    name: str | None
+    address: BillingAddress | None
+    tax_ids: list[TaxId]
+
+
+@dataclass
+class BillingDetails:
+    """Who the account's invoices are made out to, or None before it has bought anything."""
+
+    details: BillingContact | None
