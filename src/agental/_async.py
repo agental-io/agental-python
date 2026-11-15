@@ -52,12 +52,16 @@ from .models import (
     EmailMessageSummary,
     ExecEvent,
     ExecResult,
+    FileContents,
+    FileMoved,
     FileWritten,
+    Folder,
     Headroom,
     HeadroomNow,
     HeadroomStep,
     HiddenVariable,
     HostRoute,
+    KeptTerminal,
     Invite,
     Me,
     Member,
@@ -218,7 +222,8 @@ class AsyncTerminal:
     Its output is read by iterating it, each piece as the bytes the shell wrote; what is typed is
     sent with write(), and a new size with resize(). It ends when the shell does, when close() is
     called, or when the API closes it; then exit says how. Closing it hangs the shell up: what runs
-    in it is sent SIGHUP, as when an SSH session ends. Use it in an async with block to close it.
+    in it is sent SIGHUP, as when an SSH session ends. A kept one (opened with keep or attach) runs
+    on instead, to be opened again by its id. Use it in an async with block to close it.
     """
 
     def __init__(self, connection: ClientConnection) -> None:
@@ -233,6 +238,16 @@ class AsyncTerminal:
     def started(self) -> bool:
         """Whether the shell has started. What is typed before it has is kept, up to 64 KiB, and given to it once it has."""
         return self._state.started
+
+    @property
+    def id(self) -> str | None:
+        """The kept shell's id, once it has started, to open it again with terminal(attach=...). None before then, and for one that is not kept."""
+        return self._state.terminal_id
+
+    @property
+    def n(self) -> int | None:
+        """The kept shell's number in the sandbox, once it has started. None before then, and for one that is not kept."""
+        return self._state.n
 
     @property
     def exit(self) -> TerminalExit | None:
@@ -276,7 +291,7 @@ class AsyncTerminal:
         return self._exit
 
     async def close(self) -> None:
-        """Closes it, which hangs the shell up."""
+        """Closes it, which hangs the shell up, unless it is kept: then it runs on."""
         await self._connection.close(1000, "closed")
 
     async def __aenter__(self) -> AsyncTerminal:
@@ -286,7 +301,7 @@ class AsyncTerminal:
         await self.close()
 
 
-async def _open_terminal(http: _Http, path: str, size: dict[str, int]) -> AsyncTerminal:
+async def _open_terminal(http: _Http, path: str, size: dict[str, Any]) -> AsyncTerminal:
     """Asks for a ticket, and opens the WebSocket with it as a subprotocol, never in the URL."""
     verifier, challenge = _core.terminal_pkce()
     answer = await http.run(_core.one(Call("POST", f"{path}/terminal", body={**size, "challenge": challenge})))
@@ -313,25 +328,62 @@ async def _open_terminal(http: _Http, path: str, size: dict[str, int]) -> AsyncT
 
 
 class AsyncFiles:
-    """The files in a sandbox's work folder, /opt/agental. Paths are relative to it."""
+    """The files on a sandbox's machine.
 
-    def __init__(self, http: _Http, path: str) -> None:
+    A path is relative to the work folder, /opt/agental, or absolute: anywhere on the
+    machine, as root sees it.
+    """
+
+    def __init__(self, http: _Http, path: str, folders: str) -> None:
         self._http = http
         self._path = path
+        self._folders = folders
 
     async def read(self, path: str) -> str:
         """The text of a file. One that is not UTF-8 is refused: read it with read_bytes."""
-        body = await self._http.run(_core.one(Call("GET", self._path, query={"path": path}, replay=True)))
-        return str(body.get("text", ""))
+        return (await self.get(path)).text or ""
 
     async def read_bytes(self, path: str) -> bytes:
-        body = await self._http.run(_core.one(Call("GET", self._path, query={"path": path, "encoding": "base64"}, replay=True)))
-        return base64.b64decode(body.get("base64", ""))
+        return base64.b64decode((await self.get(path, encoding="base64")).base64 or "")
 
-    async def write(self, path: str, contents: str | bytes) -> FileWritten:
-        """Writes a file of up to 10 MB, making the folders it needs."""
-        body = await self._http.run(_core.one(Call("PUT", self._path, body=_core.file_body(path, contents), replay=True)))
-        return build(FileWritten, body)
+    async def get(self, path: str, *, encoding: Literal["text", "base64"] | None = None) -> FileContents:
+        """A file with its size and when it was last changed: modified_at is what write takes as if_modified_at."""
+        query = {"path": path} if encoding is None else {"path": path, "encoding": encoding}
+        return build(FileContents, await self._http.run(_core.one(Call("GET", self._path, query=query, replay=True))))
+
+    async def write(self, path: str, contents: str | bytes, *, if_modified_at: str | None = None) -> FileWritten:
+        """Writes a file of up to 10 MB, making the folders it needs.
+
+        With if_modified_at, the modified_at the file was read with, it is refused with
+        file_changed if the file was changed or deleted since.
+        """
+        body: dict[str, str] = _core.file_body(path, contents)
+        if if_modified_at is not None:
+            body["ifModifiedAt"] = if_modified_at
+        # Sent again after a lost answer, a write made on a time would be refused by its own change.
+        return build(FileWritten, await self._http.run(_core.one(Call("PUT", self._path, body=body, replay=if_modified_at is None))))
+
+    async def list(self, path: str) -> Folder:
+        """What a folder holds, by name: its first 10,000 entries, and truncated if there are more."""
+        return build(Folder, await self._http.run(_core.one(Call("GET", self._folders, query={"path": path}, replay=True))))
+
+    async def make_folder(self, path: str) -> str:
+        """Makes a folder, and any missing above it, and gives its path. One there already is no error."""
+        body = await self._http.run(_core.one(Call("POST", self._folders, body={"path": path}, replay=True)))
+        return str(body["path"])
+
+    async def move(self, from_: str, to: str) -> FileMoved:
+        """Moves or renames a file or folder. Something at to already is refused with file_exists, and nothing is replaced."""
+        return build(FileMoved, await self._http.run(_core.one(Call("POST", f"{self._path}/move", body={"from": from_, "to": to}))))
+
+    async def delete(self, path: str, *, recursive: bool = False) -> None:
+        """Deletes a file, a link (never what it leads to) or an empty folder.
+
+        A folder with things in it is refused with folder_not_empty, unless recursive says
+        to delete it with everything in it.
+        """
+        query = {"path": path, "recursive": "true"} if recursive else {"path": path}
+        await self._http.run(_core.one(Call("DELETE", self._path, query=query)))
 
 
 class AsyncBrowser:
@@ -1075,7 +1127,7 @@ class AsyncSandbox:
         self.burst_fee_micros = burst_fee_micros
         self._raw = info
         self._path = f"/v1/sandboxes/{quote(self.info.id, safe='')}"
-        self.files = AsyncFiles(http, f"{self._path}/files")
+        self.files = AsyncFiles(http, f"{self._path}/files", f"{self._path}/folders")
         self.commands = AsyncCommands(http, f"{self._path}/commands")
         self.email = AsyncEmail(http, f"{self._path}/email")
         self.desktop = AsyncDesktop(http, f"{self._path}/desktop")
@@ -1104,6 +1156,11 @@ class AsyncSandbox:
     @property
     def size(self) -> str:
         return self.info.size
+
+    @property
+    def pending_size(self) -> str | None:
+        """The size its next start gives it, as last read, or None when none waits."""
+        return self.info.pending_size
 
     @property
     def status(self) -> str:
@@ -1265,7 +1322,7 @@ class AsyncSandbox:
         """
         return build(ExecResult, await self._http.run(_core.one(_core.command_call(f"{self._path}/exec", command, _ms(timeout)))))
 
-    async def terminal(self, *, cols: int = 80, rows: int = 24) -> AsyncTerminal:
+    async def terminal(self, *, cols: int = 80, rows: int = 24, keep: bool = False, attach: str | None = None) -> AsyncTerminal:
         """
         Opens a terminal on it: a login shell as root in /root, with what a command runs with, in a
         terminal of cols by rows. Read its output by iterating it, type with write(), change its
@@ -1278,8 +1335,27 @@ class AsyncSandbox:
                 async for chunk in terminal:
                     print(chunk.decode(errors="replace"), end="")
                 print(terminal.exit)
+
+        With keep, the shell runs on when the terminal closes, with the last 256 KiB it printed,
+        until it exits, close_terminal() ends it, or the sandbox stops; its id is the terminal's
+        id once it has started. attach opens a kept one again by its id, with what it kept first,
+        and closes the terminal that had it with 4009. A sandbox whose agent is from before kept
+        shells opens one that is not kept: id is then None.
         """
-        return await _open_terminal(self._http, self._path, _core.terminal_size(cols, rows))
+        body: dict[str, Any] = {**_core.terminal_size(cols, rows), **_core.terminal_keep(keep, attach)}
+        return await _open_terminal(self._http, self._path, body)
+
+    async def terminals(self) -> list[KeptTerminal]:
+        """The shells kept in it (opened with keep), oldest first: what runs in each and where, whether a terminal has it open, and how it ended. A stopped sandbox keeps none."""
+        body = await self._http.run(_core.one(Call("GET", f"{self._path}/terminals", replay=True)))
+        return [build(KeptTerminal, each) for each in body.get("terminals", [])]
+
+    async def close_terminal(self, terminal_id: str) -> None:
+        """Ends a kept shell by its id: what runs in it is sent SIGHUP, and it is no longer listed.
+
+        A shell it does not keep answers terminal_not_found; a stopped sandbox, sandbox_not_running.
+        """
+        await self._http.run(_core.one(Call("DELETE", f"{self._path}/terminals/{_core.kept_terminal_id(terminal_id, 'close_terminal')}", replay=True)))
 
     async def exec_stream(self, command: CommandLine, *, timeout: float | None = None) -> AsyncIterator[ExecEvent]:
         """Runs a command and gives its output as it arrives, then what it exited with."""
@@ -1297,6 +1373,34 @@ class AsyncSandbox:
         info.memory_lost why not.
         """
         self._read(await self._http.run(_core.stop(self._path, keep_memory, timeout, self._http.config)))
+        return self
+
+    async def resize(self, size: str, restart: bool | None = None, *, max_burst_fee_micros: int | None = None) -> AsyncSandbox:
+        """Gives it a larger size: tiny, small, medium or large, with more vCPUs, memory and disk, and its files in place.
+
+        A stopped sandbox takes it at once, and its next start boots it at it. A running one
+        keeps running at its size, and the new one waits as pending_size for its next start,
+        unless restart: then it is stopped and started again at the new size now, and every
+        process in it ends, as on a stop. An API key needs sandbox.stop and sandbox.resume as
+        well to restart one. Its own size takes a waiting one away. A smaller size is refused
+        with size_smaller, one its plan does not make with size_not_on_plan. Memory its last
+        stop kept is let go, and info.memory_lost says why. With restart, max_burst_fee_micros
+        caps what its start pays in burst fees, as for start(), and burst_fee_micros says what it
+        paid. A restart is not sent again by itself, and one that leaves a sandbox that ran not
+        running raises AgentalError, with info read as it was answered.
+        """
+        body: dict[str, Any] = {"size": size}
+        if restart is not None:
+            body["restart"] = restart
+        was_running = self.info.status == "running"
+        # A restart is not sent again by itself: one sent again after its start failed would be answered with the sandbox stopped.
+        call = Call("POST", f"{self._path}/resize", body=body, headers=_core.burst_headers(max_burst_fee_micros), replay=restart is not True)
+        answer = await self._http.run(_core.answered(call))
+        self.burst_fee_micros = _core.burst_fee_of(answer.headers)
+        self._read(answer.body)
+        if restart is True and was_running and self.info.status != "running":
+            error = f" {self.info.error}" if self.info.error else ""
+            raise AgentalError(f"Sandbox {self.id} was stopped to be restarted as a {self.info.size}, and is {self.info.status}, not running again.{error} start() starts it.")
         return self
 
     async def start(

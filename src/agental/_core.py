@@ -425,6 +425,26 @@ def terminal_size(cols: int, rows: int) -> dict[str, int]:
     return {"cols": cols, "rows": rows}
 
 
+#: A kept shell's id.
+KEPT_TERMINAL_ID = re.compile(r"pty_[0-9a-f]{16}")
+
+
+def kept_terminal_id(terminal_id: Any, what: str) -> str:
+    """A kept shell's id, or an error that says what one is."""
+    if not isinstance(terminal_id, str) or not KEPT_TERMINAL_ID.fullmatch(terminal_id):
+        raise AgentalError(f"{what} takes a kept shell's id, as pty_0123456789abcdef, not {str(terminal_id)[:100]!r}.")
+    return terminal_id
+
+
+def terminal_keep(keep: bool, attach: str | None) -> dict[str, Any]:
+    """What a ticket is asked with besides its size: keep, or the kept shell to open again."""
+    if attach is not None:
+        if keep:
+            raise AgentalError("A terminal is a new one, kept or not, or a kept one opened again: give keep or attach, not both.")
+        return {"terminal": kept_terminal_id(attach, "attach")}
+    return {"keep": True} if keep else {}
+
+
 def websocket_url(base_url: str, path: str) -> str:
     """The ws: or wss: URL of a path on the API's own address.
 
@@ -451,6 +471,9 @@ class TerminalState:
         self.started = False
         self.exit: dict[str, Any] | None = None
         self.error: dict[str, str] | None = None
+        #: The kept shell this is, as its started message names it: None for one that is not kept.
+        self.terminal_id: str | None = None
+        self.n: int | None = None
 
     def said(self, text: str) -> None:
         try:
@@ -461,6 +484,9 @@ class TerminalState:
             return
         kind = message.get("type")
         if kind == "started":
+            terminal_id, n = message.get("terminal"), _whole(message.get("n"))
+            if isinstance(terminal_id, str) and KEPT_TERMINAL_ID.fullmatch(terminal_id) and n is not None and n >= 1:
+                self.terminal_id, self.n = terminal_id, n
             self.started = True
         elif kind == "exit":
             self.exit = message

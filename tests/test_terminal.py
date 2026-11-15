@@ -24,12 +24,23 @@ from websockets.http11 import Request, Response
 from websockets.sync.server import Server, ServerConnection, serve
 from websockets.typing import Subprotocol
 
-from agental import Agental, AgentalConnectionError, AgentalError, AsyncAgental, TerminalExit
+from agental import Agental, AgentalConnectionError, AgentalError, ApiError, AsyncAgental, KeptTerminal, KeptTerminalExit, TerminalExit
 from agental import _core
+from agental.models import build
 
 ID = "sbx_0123456789abcdef"
 TICKET = "t" * 43
 PATH = f"/v1/sandboxes/{ID}/terminal"
+KEPT: dict[str, Any] = {
+    "id": "pty_00000000000000a1",
+    "n": 1,
+    "startedAt": "2026-11-15T00:00:00.000Z",
+    "running": "npm run dev",
+    "cwd": "/root/app",
+    "attached": False,
+    "output": 4096,
+    "exit": None,
+}
 
 
 class StandIn:
@@ -41,6 +52,8 @@ class StandIn:
         self.refuse = False
         self.redirect: str | None = None
         self.answer: str | None = "agental.terminal.v1"
+        #: The kept shell its started message names, or None for one that is not kept.
+        self.kept: str | None = None
         self.server: Server = serve(
             self.terminal,
             "127.0.0.1",
@@ -68,7 +81,7 @@ class StandIn:
         return Subprotocol(self.answer) if self.answer else None
 
     def terminal(self, connection: ServerConnection) -> None:
-        connection.send(json.dumps({"type": "started"}))
+        connection.send(json.dumps({"type": "started", **({"terminal": self.kept, "n": 1} if self.kept else {})}))
         for message in connection:
             self.received.append(message)
             if isinstance(message, str):
@@ -96,9 +109,17 @@ class Tickets:
 
     def __init__(self, path: str = PATH) -> None:
         self.posted: list[httpx.Request] = []
+        self.deleted: list[str] = []
         self.path = path
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path.endswith("/terminals"):
+            return httpx.Response(200, json={"terminals": [KEPT]})
+        if request.method == "DELETE":
+            self.deleted.append(request.url.path)
+            if request.url.path.endswith(KEPT["id"]):
+                return httpx.Response(204)
+            return httpx.Response(404, json={"error": {"code": "terminal_not_found", "message": f"Sandbox {ID} keeps no terminal."}})
         if request.method == "GET":
             return httpx.Response(200, json={"id": ID, "name": "agent-1", "status": "running"})
         self.posted.append(request)
@@ -240,6 +261,58 @@ def test_no_redirect_is_followed_which_would_carry_the_ticket_elsewhere(stand_in
         assert elsewhere.handshakes == []
     finally:
         elsewhere.server.shutdown()
+
+
+def test_a_kept_shell_is_asked_for_with_keep_names_itself_and_is_opened_again_with_attach(stand_in: StandIn) -> None:
+    tickets = Tickets()
+    sandbox = client(stand_in.base_url, tickets).sandboxes.get(ID)
+    stand_in.kept = KEPT["id"]
+    with sandbox.terminal(keep=True) as terminal:
+        assert terminal.id is None, "not before it has started"
+        terminal.write("exit 0")
+        terminal.wait()
+        assert (terminal.id, terminal.n) == (KEPT["id"], 1)
+    assert json.loads(tickets.posted[0].content)["keep"] is True
+    with sandbox.terminal(attach=KEPT["id"]) as again:
+        again.write("exit 0")
+        again.wait()
+    asked = json.loads(tickets.posted[1].content)
+    assert asked["terminal"] == KEPT["id"] and "keep" not in asked
+    # One that is not kept, as on a sandbox whose agent is from before kept shells, names none.
+    stand_in.kept = None
+    with sandbox.terminal(keep=True) as plain:
+        plain.write("exit 0")
+        plain.wait()
+        assert (plain.id, plain.n) == (None, None)
+
+
+def test_keep_and_attach_are_checked_before_a_ticket_is_asked_for() -> None:
+    tickets = Tickets()
+    sandbox = client("https://api.test", tickets).sandboxes.get(ID)
+    with pytest.raises(AgentalError, match="keep or attach, not both"):
+        sandbox.terminal(keep=True, attach=KEPT["id"])
+    with pytest.raises(AgentalError, match="attach takes a kept shell's id"):
+        sandbox.terminal(attach="../x")
+    assert tickets.posted == []
+
+
+def test_terminals_lists_the_kept_shells_and_close_terminal_ends_one() -> None:
+    tickets = Tickets()
+    sandbox = client("https://api.test", tickets).sandboxes.get(ID)
+    assert sandbox.terminals() == [KeptTerminal(id=KEPT["id"], n=1, started_at=KEPT["startedAt"], running="npm run dev", cwd="/root/app", attached=False, output=4096, exit=None)]
+    sandbox.close_terminal(KEPT["id"])
+    assert tickets.deleted == [f"/v1/sandboxes/{ID}/terminals/{KEPT['id']}"]
+    with pytest.raises(ApiError) as raised:
+        sandbox.close_terminal("pty_00000000000000b2")
+    assert raised.value.code == "terminal_not_found"
+    with pytest.raises(AgentalError, match="close_terminal takes a kept shell's id"):
+        sandbox.close_terminal("1")
+    assert len(tickets.deleted) == 2
+
+
+def test_an_ended_kept_shell_is_read_with_how_it_ended() -> None:
+    ended = build(KeptTerminal, {**KEPT, "running": None, "cwd": None, "exit": {"code": 0, "signal": 1}})
+    assert ended.exit == KeptTerminalExit(code=0, signal=1)
 
 
 def test_an_exit_the_guest_garbles_ends_it_without_an_error() -> None:

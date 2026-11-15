@@ -288,6 +288,8 @@ class SandboxInfo:
     memory_lost: str | None = None
     #: What it is doing, as last read: None when it is not running, not read yet, or metrics are not read here.
     activity: SandboxActivity | None = None
+    #: The size its next start gives it, which resize() left waiting while it ran. None when none waits, and from an API older than it.
+    pending_size: str | None = None
 
 
 @dataclass
@@ -455,8 +457,9 @@ class TerminalExit:
 
     ``close_code`` is 1000 when the shell ended, and then ``exit_code`` says what it exited with.
     4003: what let it be opened no longer does (a key taken away, a session ended, the sandbox
-    stopped). 4008: nothing was typed for 30 minutes. 4011: it could not be opened, or its sandbox
-    stopped answering. 1006: the connection was lost.
+    stopped). 4008: nothing was typed for 30 minutes. 4009: a kept shell was opened again
+    elsewhere, where it runs on. 4011: it could not be opened, or its sandbox stopped answering.
+    1006: the connection was lost.
     """
 
     #: What the shell exited with, or None when the terminal was closed before the shell said.
@@ -473,6 +476,36 @@ class TerminalExit:
     error_code: str | None = None
     #: That error's message.
     error_message: str | None = None
+
+
+@dataclass
+class KeptTerminalExit:
+    """How a kept shell ended."""
+
+    code: int
+    #: The signal that ended it, 0 when none did.
+    signal: int
+
+
+@dataclass
+class KeptTerminal:
+    """A shell kept in a sandbox (opened with keep=True): it runs on when its terminal closes."""
+
+    #: pty_ and 16 hex digits: what terminal(attach=...) and close_terminal() take.
+    id: str
+    #: Its number in the sandbox, from 1, in the order the shells were opened.
+    n: int
+    started_at: str
+    #: What runs in its foreground now, or the shell's own name at its prompt. None once it has ended, or where it cannot be read.
+    running: str | None
+    #: The foreground program's working directory, or None.
+    cwd: str | None
+    #: Whether a terminal has it open now.
+    attached: bool
+    #: The bytes it has printed: more than when last looked at means new output.
+    output: int
+    #: How it ended; None while it runs. An ended shell stays listed until it is closed.
+    exit: KeptTerminalExit | None = None
 
 
 @dataclass
@@ -775,9 +808,58 @@ class DesktopLink:
 
 
 @dataclass
+class FileContents:
+    """A file read from a sandbox."""
+
+    path: str
+    #: text or base64: which of the two holds the file.
+    encoding: str
+    bytes: int
+    #: When it was last changed, to the nanosecond: what write() takes as if_modified_at.
+    #: None for a sandbox made before this could be read.
+    modified_at: str | None
+    text: str | None = None
+    base64: str | None = None
+
+
+@dataclass
 class FileWritten:
     path: str
     bytes: int
+    #: When it was last changed, to the nanosecond. None for a sandbox made before this could be read.
+    modified_at: str | None = None
+
+
+@dataclass
+class FileMoved:
+    from_: str
+    to: str
+
+
+@dataclass
+class FolderEntry:
+    """One thing in a folder."""
+
+    name: str
+    #: file, folder, link or other.
+    kind: str
+    #: A file's size; 0 for a folder.
+    bytes: int
+    modified_at: str
+    #: A link's: what it points to.
+    target: str | None = None
+    #: A link's, outside the work folder: what it leads to. None where it leads nowhere.
+    leads_to: str | None = None
+
+
+@dataclass
+class Folder:
+    """A folder in a sandbox and what it holds, by name."""
+
+    path: str
+    entries: list[FolderEntry]
+    #: Whether it holds more than the first 10,000 entries by name, listed here.
+    truncated: bool
 
 
 @dataclass

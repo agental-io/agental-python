@@ -114,6 +114,46 @@ def test_a_stop_sends_no_body_and_keep_memory_when_it_is_asked_for() -> None:
     assert box.info.memory_kept is True
 
 
+def test_a_resize_sends_the_size_and_restart_only_when_asked_and_the_sandbox_says_the_size_that_waits() -> None:
+    agental, script = scripted(
+        answer(200, sandbox()),
+        answer(200, sandbox(pendingSize="medium")),
+        answer(200, sandbox(size="medium", pendingSize=None)),
+        refusal(409, "size_smaller"),
+    )
+    box = agental.sandboxes.get(ID)
+    assert box.pending_size is None
+    box.resize("medium")
+    assert (script.sent[1].method, script.sent[1].url.path, script.body(1)) == ("POST", f"/v1/sandboxes/{ID}/resize", {"size": "medium"})
+    assert (box.size, box.pending_size) == ("small", "medium")
+    box.resize("medium", restart=True)
+    assert script.body(2) == {"size": "medium", "restart": True}
+    assert (box.size, box.pending_size) == ("medium", None)
+    with pytest.raises(ApiError) as refused:
+        box.resize("tiny")
+    assert (refused.value.status, refused.value.code) == (409, "size_smaller")
+    assert box.size == "medium"
+
+
+def test_a_resize_that_restarts_is_sent_once_with_its_burst_cap_and_raises_when_not_running_again() -> None:
+    agental, script = scripted(
+        answer(200, sandbox()),
+        refusal(500, "host_error"),
+        answer(200, sandbox(size="medium"), **{"agental-burst-fee": "1200"}),
+        answer(200, sandbox(size="large", status="stopped", error="the box had no room")),
+    )
+    box = agental.sandboxes.get(ID)
+    with pytest.raises(ApiError, match="host_error"):
+        box.resize("medium", restart=True)
+    assert len(script.sent) == 2
+    box.resize("medium", restart=True, max_burst_fee_micros=5000)
+    assert script.sent[2].headers["agental-max-burst-fee"] == "5000"
+    assert (box.size, box.burst_fee_micros) == ("medium", 1200)
+    with pytest.raises(AgentalError, match="is stopped, not running again. the box had no room"):
+        box.resize("large", restart=True)
+    assert box.status == "stopped"
+
+
 def test_a_stop_that_keeps_memory_and_is_answered_202_reads_the_sandbox_until_it_has_stopped() -> None:
     op = {"id": "op_1", "type": "stop", "status": "pending", "sandboxId": ID, "error": None, "createdAt": "2026-10-13T00:00:00.000Z", "updatedAt": "2026-10-13T00:00:00.000Z"}
     agental, script = scripted(
@@ -312,6 +352,42 @@ def test_a_read_is_sent_again_and_a_file_write_waits_a_move_out() -> None:
     assert script.body(8) == {"path": "a.bin", "base64": "AP8Q"}
     assert box.files.read_bytes("a.bin") == bytes([0, 255, 16])
     assert script.sent[9].url.params["encoding"] == "base64"
+
+
+def test_a_folder_is_listed_made_and_a_file_moved_deleted_and_written_on_the_time_it_was_read_with() -> None:
+    at = "2026-11-15T10:04:05.123456789Z"
+    agental, script = scripted(
+        answer(200, sandbox()),
+        answer(200, {"path": "/etc/hostname", "encoding": "text", "bytes": 4, "modifiedAt": at, "text": "box\n"}),
+        refusal(409, "file_changed"),
+        answer(200, {"path": "/var/log", "truncated": False, "entries": [{"name": "syslog", "kind": "file", "bytes": 9, "modifiedAt": at}, {"name": "last", "kind": "link", "bytes": 0, "modifiedAt": at, "target": "/x", "leadsTo": "file"}]}),
+        answer(200, {"path": "out/today"}),
+        answer(200, {"from": "a.txt", "to": "out/a.txt"}),
+        answer(204),
+    )
+    box = agental.sandboxes.get(ID)
+
+    file = box.files.get("/etc/hostname")
+    assert (file.bytes, file.modified_at, file.text) == (4, at, "box\n")
+    # A write on a time is not sent again: its own change would refuse it.
+    with pytest.raises(ApiError, match="file_changed"):
+        box.files.write("/etc/hostname", "new\n", if_modified_at=at)
+    assert script.body(2) == {"path": "/etc/hostname", "text": "new\n", "ifModifiedAt": at}
+    assert len(script.sent) == 3
+
+    folder = box.files.list("/var/log")
+    assert str(script.sent[3].url) == f"https://api.test/v1/sandboxes/{ID}/folders?path=%2Fvar%2Flog"
+    assert [entry.name for entry in folder.entries] == ["syslog", "last"]
+    assert (folder.entries[1].target, folder.entries[1].leads_to, folder.truncated) == ("/x", "file", False)
+
+    assert box.files.make_folder("out/today") == "out/today"
+    assert (script.sent[4].method, script.body(4)) == ("POST", {"path": "out/today"})
+    moved = box.files.move("a.txt", "out/a.txt")
+    assert (moved.from_, moved.to) == ("a.txt", "out/a.txt")
+    assert (str(script.sent[5].url), script.body(5)) == (f"https://api.test/v1/sandboxes/{ID}/files/move", {"from": "a.txt", "to": "out/a.txt"})
+    box.files.delete("out", recursive=True)
+    assert script.sent[6].method == "DELETE"
+    assert dict(script.sent[6].url.params) == {"path": "out", "recursive": "true"}
 
 
 def test_what_is_the_callers_doing_is_not_sent_again() -> None:

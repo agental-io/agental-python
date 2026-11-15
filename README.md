@@ -103,13 +103,22 @@ sandbox.schedules.update(tick.id, enabled=False)  # paused
 
 ## Files
 
-Paths are relative to the work folder, `/opt/agental`. A file can be up to 10 MB.
+A path is relative to the work folder, `/opt/agental`, or absolute: anywhere on the machine, as root sees it. A file can be up to 10 MB.
 
 ```python
 sandbox.files.write("notes.txt", "hi")
 sandbox.files.read("notes.txt")  # "hi"
 sandbox.files.write("logo.png", data)  # bytes
 sandbox.files.read_bytes("logo.png")
+sandbox.files.read("/etc/hostname")
+
+file = sandbox.files.get("notes.txt")  # path, bytes, modified_at, text
+sandbox.files.write("notes.txt", "ho", if_modified_at=file.modified_at)  # file_changed if it was changed since
+
+sandbox.files.list("/var/log")  # path, entries (name, kind, bytes, modified_at), truncated
+sandbox.files.make_folder("out/today")
+sandbox.files.move("notes.txt", "out/today/notes.txt")  # file_exists if something is there
+sandbox.files.delete("out", recursive=True)
 ```
 
 ## Stop, start, fork, snapshot
@@ -220,7 +229,23 @@ with sandbox.terminal(cols=120, rows=32) as terminal:
 print(terminal.exit.exit_code)  # 3
 ```
 
-`AsyncSandbox.terminal()` is the same with `await` and `async for`. It needs a key with the `exec` action, and the sandbox running. The API closes it when the shell ends (`exit.close_code` 1000, with `exit_code`), when the key or the sandbox no longer lets it be open (4003), after 30 minutes with nothing typed (4008), and when its sandbox stops answering (4011); `exit.error_message` says why when the API did. Closing it hangs the shell up, as an SSH session's end does: start what must outlive it with `nohup` or `setsid`. The command's `agental shell <sandbox-id>` opens one in your own terminal.
+`AsyncSandbox.terminal()` is the same with `await` and `async for`. It needs a key with the `exec` action, and the sandbox running. The API closes it when the shell ends (`exit.close_code` 1000, with `exit_code`), when the key or the sandbox no longer lets it be open (4003), after 30 minutes with nothing typed (4008), and when its sandbox stops answering (4011); `exit.error_message` says why when the API did. Closing it hangs the shell up, as an SSH session's end does, unless the shell is kept. The command's `agental shell <sandbox-id>` opens one in your own terminal.
+
+A kept shell runs on when its terminal closes, until it exits, is closed, or the sandbox stops, and is opened again by its id, with the last 256 KiB it printed first:
+
+```python
+with sandbox.terminal(keep=True) as first:
+    first.write("npm run dev\n")
+    next(iter(first))  # once it has started, first.id is "pty_…" and first.n its number
+    shell_id = first.id  # None on a sandbox whose agent is from before kept shells
+# npm run dev runs on
+sandbox.terminals()  # [KeptTerminal(id=..., n=1, running="npm run dev", cwd="/root/app", attached=False, exit=None, ...)]
+with sandbox.terminal(attach=shell_id) as again:
+    ...
+sandbox.close_terminal(shell_id)  # ends it: what runs in it is sent SIGHUP
+```
+
+Opening a kept shell again closes the terminal that had it with `exit.close_code` 4009: it runs on in the new one.
 
 ## Desktop
 
