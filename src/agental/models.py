@@ -221,7 +221,9 @@ class SandboxActivity:
     """What a running sandbox is doing, as the service last read it, about once a minute."""
 
     #: low-cpu (an hour under 5% CPU, observed: a heuristic, as an agent waiting on a model uses almost none),
-    #: disk-full, memory-full (90% or more), not-read (its server has not answered for 3 minutes).
+    #: disk-full, memory-full (90% or more), agent-silent (the agent in it that runs commands, files and the
+    #: terminal has not answered for 15 s: those fail until a stop and a start), not-read (its server has not
+    #: answered for 3 minutes).
     states: list[str]
     #: Its CPU now, and at its busiest in the last hour, 0 to 1 of its vCPUs.
     cpu_now: float | None

@@ -1555,7 +1555,7 @@ class AsyncSandboxes:
         judged as the sandbox shows them: its template's count, and its own value for a key wins.
         A metadata value of "*" is any value, the key being set; in not_metadata, the key not set.
         status is creating, running, stopped, error, restoring or migrating; outbound is open,
-        blocked or allowlist; activity is low-cpu, disk-full, memory-full or not-read; stops="never" is no auto-stop time; text is found in the name or id.
+        blocked or allowlist; activity is low-cpu, disk-full, memory-full, agent-silent or not-read; stops="never" is no auto-stop time; text is found in the name or id.
         """
         found: builtins.list[AsyncSandbox] = []
         cursor: str | None = None
