@@ -1733,6 +1733,8 @@ class ApiKey:
     sandbox_ids: list[str]
     #: The templates it is limited to: it reaches them and every sandbox on them. Empty is every template.
     template_ids: list[str]
+    #: True for a key that reaches only the sandboxes it made, and their snapshots.
+    made_only: bool
     #: When it stops working. None is never.
     expires_at: str | None
     #: The addresses and ranges it may be used from. Empty is anywhere.
@@ -1767,6 +1769,8 @@ class CreateApiKey:
     sandbox_ids: list[str] | None = None
     #: It reaches these templates and the sandboxes on them. With several and not the default, a sandbox it makes has to name one.
     template_ids: list[str] | None = None
+    #: True limits it to the sandboxes it makes itself. Not with sandbox_ids or template_ids.
+    made_only: bool | None = None
     #: An ISO 8601 date and time with its offset. Left out, never.
     expires_at: str | None = None
     #: IPv4 and IPv6 addresses and ranges, 100 at most. Left out, anywhere.

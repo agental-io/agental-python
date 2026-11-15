@@ -1978,6 +1978,7 @@ class AsyncApiKeys:
         actions: Sequence[ApiKeyAction] | None = None,
         sandbox_ids: Sequence[str] | None = None,
         template_ids: Sequence[str] | None = None,
+        made_only: bool | None = None,
         expires_at: str | datetime | None = None,
         allow_from: Sequence[str] | None = None,
     ) -> CreatedApiKey:
@@ -1986,7 +1987,7 @@ class AsyncApiKeys:
         Give preset (read-only, full-sandbox, ci or admin) or actions, the names of what it
         may do, and not both. sandbox_ids and template_ids limit it to those sandboxes and
         templates and the sandboxes on them; it always reaches the sandboxes it makes.
-        expires_at is when it stops working: a datetime with its time zone, or an ISO 8601
+        made_only=True limits it to the sandboxes it makes alone. expires_at is when it stops working: a datetime with its time zone, or an ISO 8601
         string with its offset. allow_from is the addresses and ranges it may be used from.
         It is sent once, so a lost answer is not sent again.
         """
@@ -1998,6 +1999,7 @@ class AsyncApiKeys:
             actions=None if actions is None else list(actions),
             sandbox_ids=None if sandbox_ids is None else list(sandbox_ids),
             template_ids=None if template_ids is None else list(template_ids),
+            made_only=made_only,
             expires_at=_core.iso(expires_at),
             allow_from=None if allow_from is None else list(allow_from),
         )
