@@ -879,9 +879,10 @@ class SizeInfo:
 
 @dataclass
 class Catalog:
-    """The default region, how many sandboxes there are, and the sizes on offer."""
+    """The default region, how many of your sandboxes there are, and the sizes on offer."""
 
     region: str
+    #: Your sandboxes that are creating, running or stopped: the account's, not the deployment's.
     used: int
     sizes: list[SizeInfo]
     vm_isolation: bool

@@ -2145,7 +2145,7 @@ class Agental:
         return build(HostRoute, self._http.run(_core.one(Call("POST", f"/v1/host-routes/{quote(route_id, safe='')}/hide", replay=True))))
 
     def limits(self) -> Catalog:
-        """The sizes on offer, and how much room there is."""
+        """The sizes on offer, the regions, and how many of your sandboxes are creating, running or stopped."""
         return build(Catalog, self._http.run(_core.one(Call("GET", "/v1/limits", replay=True))))
 
     def policy(self) -> Policy:
