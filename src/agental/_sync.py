@@ -1911,6 +1911,7 @@ class Jobs:
         alerts: str | None = None,
         enabled: bool | None = None,
         inputs: Mapping[str, str | None | Mapping[str, Any]] | None = None,
+        events: Sequence[Mapping[str, Any]] | None = None,
     ) -> Job:
         """Makes a job: the sandbox it runs in, by its id or its name, what it runs, through sh -c, and when.
 
@@ -1939,9 +1940,17 @@ class Jobs:
         that runs when asked), or {"default": ..., "secret": True} for one sealed where it is kept
         and masked as •••• in output. A run by the clock is given the defaults.
 
+        events are what else starts it: {"on": "job.run_finished", "job": "build", "outcome":
+        "succeeded"} when a run of another job ends (outcome succeeded, failed for good after its
+        retries, or any, the default), and {"on": "email.received", "sandbox": "inbox"} when mail
+        arrives at a sandbox's address. The command is told what started it, as
+        AGENTAL_TRIGGER_JOB, AGENTAL_TRIGGER_RUN and AGENTAL_TRIGGER_OUTCOME, or
+        AGENTAL_TRIGGER_SANDBOX and AGENTAL_TRIGGER_EMAIL, the message's id. A run an event starts is
+        given the inputs' defaults. A chain that comes back to the job is refused.
+
         body is the API's JSON, as POST /v1/jobs takes it; what is given by name goes over it.
         """
-        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs))
+        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs), events=_events(events))
         return build(Job, self._http.run(_core.one(Call("POST", "/v1/jobs", body={**(body or {}), **given}))))
 
     def get(self, id_or_name: str) -> Job:
@@ -1971,17 +1980,18 @@ class Jobs:
         alerts: str | None = None,
         enabled: bool | None = None,
         inputs: Mapping[str, str | None | Mapping[str, Any]] | None = None,
+        events: Sequence[Mapping[str, Any]] | None = None,
     ) -> Job:
         """Changes a job. What is left out is as it was; enabled=False pauses it, and drops a retry that waits.
 
         sandbox, or template and size, moves it to another sandbox, or to fresh sandboxes from
-        another template; keep_failed_for is a fresh job's only. retries, alerts and inputs are as
-        create() takes them; inputs given replace the ones the job had.
+        another template; keep_failed_for is a fresh job's only. retries, alerts, inputs and events are as
+        create() takes them; inputs or events given replace the ones the job had, and events=[] takes them all away.
 
         body is the API's JSON, as PATCH /v1/jobs/{id} takes it, where a null clears every, cron or at;
         what is given by name goes over it.
         """
-        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs))
+        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs), events=_events(events))
         return build(Job, self._http.run(_core.one(Call("PATCH", self._path(id_or_name), body={**(body or {}), **given}, replay=True))))
 
     def pause(self, id_or_name: str) -> Job:
@@ -2018,6 +2028,7 @@ class Jobs:
         alerts: str | None = None,
         enabled: bool | None = None,
         inputs: Mapping[str, str | None | Mapping[str, Any]] | None = None,
+        events: Sequence[Mapping[str, Any]] | None = None,
     ) -> JobPut:
         """Makes the job of this name, or changes it to exactly this: whatever is left out goes back to its default, as on a new job.
 
@@ -2027,7 +2038,7 @@ class Jobs:
 
         body is the API's JSON, as PUT /v1/jobs/{name} takes it; what is given by name goes over it.
         """
-        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs))
+        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs), events=_events(events))
         answer = self._http.run(_core.answered(Call("PUT", self._path(name), body={**(body or {}), **given}, replay=True)))
         created = answer.status == 201
         return JobPut(job=build(Job, answer.body), created=created, changed=created or answer.headers.get("agental-changed") != "false")
@@ -2177,6 +2188,11 @@ def _job_target(sandbox: str | None, template: str | None, size: str | None) -> 
 def _inputs(inputs: Mapping[str, str | None | Mapping[str, Any]] | None) -> dict[str, Any] | None:
     """A job's inputs as the API takes them: each a default, None for one a run must be given, or {"default": ..., "secret": True}."""
     return None if inputs is None else {name: dict(spec) if isinstance(spec, Mapping) else spec for name, spec in inputs.items()}
+
+
+def _events(events: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """A job's events as the API takes them: each a mapping with on, and job (and outcome) or sandbox."""
+    return None if events is None else [dict(event) for event in events]
 
 
 def _job_body(**fields: Any) -> dict[str, Any]:

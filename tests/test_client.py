@@ -25,7 +25,9 @@ from agental import (
     AsyncAgental,
     ExecEvent,
     HiddenVariable,
+    JobEvent,
     JobInput,
+    JobRunTrigger,
     PlainVariable,
     ProxyError,
     SendEmailAttachment,
@@ -2668,3 +2670,16 @@ def test_a_connections_sessions_are_listed() -> None:
     listed = agental.list_claude_sessions("ccn_7f3a91c2d04e5b18")
     assert (script.sent[0].method, script.sent[0].url.path) == ("GET", "/v1/claude/connections/ccn_7f3a91c2d04e5b18/sessions")
     assert (listed[0].session_id, listed[0].state, listed[0].deletes_at) == ("sesn_01", "sleeping", "2026-11-20T20:05:00.000Z")
+
+
+def test_a_job_is_made_with_events_that_start_it_and_a_run_says_which_event_started_it() -> None:
+    events = [{"on": "job.run_finished", "job": "job_build", "jobName": "build", "outcome": "succeeded"}, {"on": "email.received", "sandbox": "sbx_inbox", "sandboxName": "inbox"}]
+    trigger = {"on": "email.received", "sandbox": "sbx_inbox", "sandboxName": "inbox", "email": "msg_1"}
+    agental, script = scripted(answer(201, job(events=events)), answer(200, {"runs": [job_run(startedBy="event", trigger=trigger)]}), answer(200, job(events=[])))
+    made = agental.jobs.create(sandbox="agent-1", command="./deploy.sh", events=[{"on": "job.run_finished", "job": "build", "outcome": "succeeded"}, {"on": "email.received", "sandbox": "inbox"}])
+    assert script.body(0)["events"] == [{"on": "job.run_finished", "job": "build", "outcome": "succeeded"}, {"on": "email.received", "sandbox": "inbox"}]
+    assert made.events == [JobEvent(on="job.run_finished", job="job_build", job_name="build", outcome="succeeded"), JobEvent(on="email.received", sandbox="sbx_inbox", sandbox_name="inbox")]
+    (run,) = agental.jobs.runs("deploy")
+    assert run.trigger == JobRunTrigger(on="email.received", sandbox="sbx_inbox", sandbox_name="inbox", email="msg_1")
+    agental.jobs.update("deploy", events=[])
+    assert script.body(2) == {"events": []}

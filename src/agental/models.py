@@ -562,6 +562,38 @@ class JobInput:
 
 
 @dataclass
+class JobEvent:
+    """An event that starts a job: another job's run ending (job.run_finished), or mail arriving at a sandbox (email.received)."""
+
+    #: job.run_finished or email.received.
+    on: str
+    #: job.run_finished: the other job's id and name, and which of its runs' ends start this one: succeeded, failed (for good, after its retries) or any.
+    job: str | None = None
+    job_name: str | None = None
+    outcome: str | None = None
+    #: email.received: the sandbox whose mail starts it, and its name.
+    sandbox: str | None = None
+    sandbox_name: str | None = None
+
+
+@dataclass
+class JobRunTrigger:
+    """The event that started a run, where its started_by is event."""
+
+    #: job.run_finished or email.received.
+    on: str
+    #: job.run_finished: the job whose run ended, that run, and how it ended, as the command's AGENTAL_TRIGGER_JOB, AGENTAL_TRIGGER_RUN and AGENTAL_TRIGGER_OUTCOME.
+    job: str | None = None
+    job_name: str | None = None
+    run: str | None = None
+    outcome: str | None = None
+    #: email.received: the sandbox and the message's id, as AGENTAL_TRIGGER_SANDBOX and AGENTAL_TRIGGER_EMAIL.
+    sandbox: str | None = None
+    sandbox_name: str | None = None
+    email: str | None = None
+
+
+@dataclass
 class JobRun:
     """One run of a job: when it was due, how it ended, and what it did to its sandbox."""
 
@@ -589,7 +621,7 @@ class JobRun:
     stopped_sandbox: str | None
     #: Whether this run's sandbox was deleted by it: a fresh one after the run, or once keep_failed_for passed; a kept one after its command exited 0, as its job's after="delete" asks.
     deleted_sandbox: bool
-    #: timer, its time came; run_now, a person in the console asked; api, an API key asked; http, a call of one of its job's addresses.
+    #: timer, its time came; run_now, a person in the console asked; api, an API key asked; http, a call of one of its job's addresses; event, one of its job's events (trigger says which).
     started_by: str
     #: Whether it ran in a fresh sandbox, made from its job's template for this run.
     fresh: bool = False
@@ -603,6 +635,8 @@ class JobRun:
     failed_for_good: bool = False
     #: What it was given, by name, as variables of its command: a secret one as ••••.
     inputs: dict[str, str] = field(default_factory=dict)
+    #: The event that started it, where started_by is event.
+    trigger: JobRunTrigger | None = None
 
 
 @dataclass
@@ -665,6 +699,8 @@ class Job:
     failing_since: str | None = None
     #: The variables a run may be given, by name, each with its default.
     inputs: dict[str, JobInput] = field(default_factory=dict)
+    #: The events that start it: another job's run ending, or mail arriving at a sandbox.
+    events: list[JobEvent] = field(default_factory=list)
 
 
 @dataclass
@@ -767,6 +803,10 @@ class Snapshot:
     browsable: bool
     size: str | None
     sandbox_deleted: bool
+    #: The name of the sandbox it was taken of, kept after that sandbox is deleted. None when no record of it is left.
+    sandbox_name: str | None = None
+    #: The status of the sandbox it was taken of: deleted once it is. None from an API that does not send it.
+    sandbox_status: str | None = None
 
 
 @dataclass
