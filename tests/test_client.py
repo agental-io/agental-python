@@ -1462,6 +1462,28 @@ def test_the_screen_is_pictured_as_bytes_and_the_pointer_and_keyboard_are_each_u
     assert len(script.sent) == 10
 
 
+def test_the_desktops_tree_is_asked_for_as_the_options_say_and_read_into_its_models() -> None:
+    tree = {
+        "windows": [{"index": 0, "program": "Thunar", "title": "root - Thunar", "bounds": {"x": 0, "y": 27, "width": 650, "height": 514}, "active": True}],
+        "elements": [
+            {"index": 0, "window": 0, "role": "push button", "name": "Home", "bounds": {"x": 120, "y": 85, "width": 37, "height": 35}, "states": ["focused"]},
+            {"index": 1, "window": 0, "role": "text", "name": "", "bounds": {"x": 157, "y": 85, "width": 448, "height": 35}, "value": "/root/"},
+        ],
+        "truncated": False,
+    }
+    agental, script = scripted(answer(200, sandbox()), answer(200, tree), answer(200, tree))
+    box = agental.sandboxes.get(ID)
+    at = f"/v1/sandboxes/{ID}/desktop/tree"
+    read = box.desktop.tree()
+    assert (script.sent[1].method, script.sent[1].url.path, script.sent[1].url.query) == ("GET", at, b"")
+    assert read.windows[0].program == "Thunar" and read.windows[0].active is True
+    assert read.elements[0].bounds.x == 120 and read.elements[0].states == ["focused"] and read.elements[0].value is None
+    assert read.elements[1].value == "/root/" and read.elements[1].states is None
+    assert read.truncated is False
+    box.desktop.tree(window="Thunar", query="home", limit=50)
+    assert dict(script.sent[2].url.params) == {"window": "Thunar", "query": "home", "limit": "50"}
+
+
 def test_a_picture_is_asked_for_as_the_options_say_the_clipboard_is_read_and_written_and_links_are_made_listed_and_taken_away() -> None:
     jpeg = b"\xff\xd8\xff\xd9"
     shot = {"mediaType": "image/jpeg", "width": 320, "height": 200, "region": {"x": 100, "y": 50, "width": 640, "height": 400}, "base64": base64.b64encode(jpeg).decode()}
@@ -2308,14 +2330,14 @@ def test_a_job_is_previewed_by_a_filter_made_from_the_preview_once_and_waited_on
         answer(202, job),
         answer(200, {**job, "state": "done"}),
     )
-    preview = agental.jobs.preview("stop", filter={"status": "running", "tag": "ci"}, options={"keepMemory": True})
+    preview = agental.bulk_actions.preview("stop", filter={"status": "running", "tag": "ci"}, options={"keepMemory": True})
     assert script.body(0) == {"action": "stop", "options": {"keepMemory": True}, "select": {"filter": {"status": "running", "tag": "ci"}}}
-    made = agental.jobs.create(preview_id=preview["id"], idempotency_key="nightly-stop-1")
+    made = agental.bulk_actions.create(preview_id=preview["id"], idempotency_key="nightly-stop-1")
     assert script.sent[1].headers["Idempotency-Key"] == "nightly-stop-1"
     assert script.body(1) == {"previewId": "sjp_1"}
-    assert agental.jobs.wait(made["id"])["state"] == "done"
+    assert agental.bulk_actions.wait(made["id"])["state"] == "done"
     with pytest.raises(ValueError, match="list"):
-        agental.jobs.preview("stop", filter={"colour": "red"})
+        agental.bulk_actions.preview("stop", filter={"colour": "red"})
 
 
 def egress_account(**changes: Any) -> dict[str, Any]:

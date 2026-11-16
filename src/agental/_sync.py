@@ -47,6 +47,7 @@ from .models import (
     DesktopLink,
     DesktopScreenshot,
     DesktopState,
+    DesktopTree,
     EmailMessage,
     EmailMessageList,
     EmailMessageSummary,
@@ -617,6 +618,18 @@ class Desktop:
             query.update({"x": str(region[0]), "y": str(region[1]), "width": str(region[2]), "height": str(region[3])})
         body = self._http.run(_core.one(Call("GET", f"{self._path}/screenshot", query=query, replay=True)))
         return build(DesktopScreenshot, body)
+
+    def tree(self, *, window: str | None = None, query: str | None = None, limit: int | None = None) -> DesktopTree:
+        """What is on the screen as its programs tell it: each window, and its buttons, fields, menus and texts.
+
+        Each element has its role, name, states and bounds in screen pixels, the ones click
+        takes. window keeps the windows whose title or program holds it, query the elements
+        whose name or role does, and limit says how many elements at most, 300 unless given.
+        It holds the desktop's own programs; a page in the browser is not in it. It changes nothing.
+        """
+        params: dict[str, str | None] = {"window": window, "query": query, "limit": None if limit is None else str(limit)}
+        body = self._http.run(_core.one(Call("GET", f"{self._path}/tree", query=params, replay=True)))
+        return build(DesktopTree, body)
 
     def clipboard(self) -> str:
         """The text on the desktop's clipboard: what a paste there would put in. "" when it holds none. It changes nothing."""
@@ -1367,7 +1380,7 @@ class Sandbox:
         Stops it. The disk is kept, with everything on it, at 5% of the running price where
         that is charged. What was running is not, unless keep_memory: then its memory is kept
         too, at 10% of the running price, and start() puts back every process as it was. That
-        returns once the memory is written, about a second for each 110 MB the sandbox uses:
+        returns once the memory is written, about a second for every 2 to 3 GiB the sandbox has:
         past a minute the API says the stop goes on, and it is read until it has stopped, for
         timeout seconds at most. info.memory_kept says whether it was, and after start(),
         info.memory_lost why not.
@@ -1833,7 +1846,7 @@ def _filter_query(
     return query
 
 
-class SandboxJobs:
+class BulkActions:
     """Jobs that act on many sandboxes at once.
 
     A preview fixes the sandboxes a filter finds; a job acts on exactly those, checking each again
@@ -1860,7 +1873,7 @@ class SandboxJobs:
             raise ValueError("preview takes filter or ids, one of them")
         select: dict[str, Any] = {"ids": builtins.list(ids)} if ids is not None else {"filter": _filter_query(**_filter_defaults(filter or {}))}
         body = {"action": action, "options": dict(options or {}), "select": select}
-        answer: dict[str, Any] = self._http.run(_core.one(Call("POST", "/v1/sandbox-jobs/preview", body=body)))
+        answer: dict[str, Any] = self._http.run(_core.one(Call("POST", "/v1/bulk-actions/preview", body=body)))
         return answer
 
     def create(
@@ -1881,27 +1894,27 @@ class SandboxJobs:
         if confirm is not None:
             body["confirm"] = confirm
         key = idempotency_key or f"sdk-{uuid.uuid4().hex[:12]}"
-        answer: dict[str, Any] = self._http.run(_core.one(Call("POST", "/v1/sandbox-jobs", body=body, headers={"Idempotency-Key": key}, replay=True)))
+        answer: dict[str, Any] = self._http.run(_core.one(Call("POST", "/v1/bulk-actions", body=body, headers={"Idempotency-Key": key}, replay=True)))
         return answer
 
     def get(self, job_id: str) -> dict[str, Any]:
-        answer: dict[str, Any] = self._http.run(_core.one(Call("GET", f"/v1/sandbox-jobs/{quote(job_id, safe='')}", replay=True)))
+        answer: dict[str, Any] = self._http.run(_core.one(Call("GET", f"/v1/bulk-actions/{quote(job_id, safe='')}", replay=True)))
         return answer
 
     def list(self) -> builtins.list[dict[str, Any]]:
         """The organization's last 50 jobs, the newest first."""
-        answer = self._http.run(_core.one(Call("GET", "/v1/sandbox-jobs", replay=True)))
-        return builtins.list(answer["jobs"])
+        answer = self._http.run(_core.one(Call("GET", "/v1/bulk-actions", replay=True)))
+        return builtins.list(answer["actions"])
 
     def items(self, job_id: str, *, state: str | None = None, limit: int | None = None, cursor: str | None = None) -> dict[str, Any]:
         """A page of a job's items, in order: each with its state, why, and what it made or follows."""
         query = {"state": state, "limit": None if limit is None else str(limit), "cursor": cursor}
-        answer: dict[str, Any] = self._http.run(_core.one(Call("GET", f"/v1/sandbox-jobs/{quote(job_id, safe='')}/items", query=query, replay=True)))
+        answer: dict[str, Any] = self._http.run(_core.one(Call("GET", f"/v1/bulk-actions/{quote(job_id, safe='')}/items", query=query, replay=True)))
         return answer
 
     def cancel(self, job_id: str) -> dict[str, Any]:
         """No item that has not begun begins; those under way are followed to their end."""
-        answer: dict[str, Any] = self._http.run(_core.one(Call("POST", f"/v1/sandbox-jobs/{quote(job_id, safe='')}/cancel", replay=True)))
+        answer: dict[str, Any] = self._http.run(_core.one(Call("POST", f"/v1/bulk-actions/{quote(job_id, safe='')}/cancel", replay=True)))
         return answer
 
     def wait(self, job_id: str) -> dict[str, Any]:
@@ -2124,7 +2137,7 @@ class Agental:
         #: The organizations the key's person is in, and the members and invites of a team.
         self.organizations = Organizations(self._http)
         #: Jobs that act on many sandboxes at once: a preview fixes the set, a job acts on exactly it.
-        self.jobs = SandboxJobs(self._http)
+        self.bulk_actions = BulkActions(self._http)
 
     def regions(self) -> list[Region]:
         """The regions sandboxes can be made in now, the default first, with the sizes each has room for."""

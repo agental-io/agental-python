@@ -268,7 +268,7 @@ print(link.url)
 sandbox.desktop.off()  # closes what was open on it
 ```
 
-`move`, `drag` and `scroll` move the pointer, and `clipboard()` and `set_clipboard(text)` read and fill the clipboard. A click, a key or typing is never sent twice by itself. `agental.policy().desktop` says whether a sandbox can have a desktop where you are.
+`move`, `drag` and `scroll` move the pointer, and `clipboard()` and `set_clipboard(text)` read and fill the clipboard. `tree(window=..., query=...)` gives the windows on the screen and the buttons, fields and menus in them, each with its place, to click by name rather than from a picture. A click, a key or typing is never sent twice by itself. `agental.policy().desktop` says whether a sandbox can have a desktop where you are.
 
 ## Browser
 

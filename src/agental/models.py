@@ -793,6 +793,52 @@ class DesktopScreenshot:
 
 
 @dataclass
+class DesktopTreeWindow:
+    """A window on a sandbox's screen, as its program tells it."""
+
+    #: Its place in windows, which elements name it by.
+    index: int
+    program: str
+    #: Its title, or "".
+    title: str
+    bounds: DesktopRegion
+    #: Whether it is the window the keyboard goes to.
+    active: bool
+
+
+@dataclass
+class DesktopTreeElement:
+    """A button, a field, a menu or a text in a window, and where it is on the screen.
+
+    Click its middle: (bounds.x + bounds.width // 2, bounds.y + bounds.height // 2).
+    """
+
+    #: Its place in elements, for this answer only: the screen changes.
+    index: int
+    #: The index of its window in windows.
+    window: int
+    #: What it is: push button, entry, text, menu, menu item, check box, page tab, link, label and others.
+    role: str
+    #: Its name, as a screen reader would say it, or "".
+    name: str
+    bounds: DesktopRegion
+    #: What is notable about it now: focused, checked, selected, expanded, pressed, editable, disabled. None when nothing is.
+    states: list[str] | None = None
+    #: The text in it, for a field.
+    value: str | None = None
+
+
+@dataclass
+class DesktopTree:
+    """What is on a sandbox's screen as its programs tell it: its windows, and the elements in them."""
+
+    windows: list[DesktopTreeWindow]
+    elements: list[DesktopTreeElement]
+    #: Whether there was more than the limit, or than could be read in the time a read is given.
+    truncated: bool
+
+
+@dataclass
 class DesktopLink:
     """A link to a sandbox's desktop: to watch it only, or to use it as well, until it expires."""
 
