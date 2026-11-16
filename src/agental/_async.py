@@ -62,6 +62,14 @@ from .models import (
     HeadroomStep,
     HiddenVariable,
     HostRoute,
+    Job,
+    JobRun,
+    JobRunWithOutput,
+    JobPut,
+    JobUsage,
+    JobTrigger,
+    JobTriggerWithSecret,
+    RefusedJobCall,
     KeptTerminal,
     Invite,
     Me,
@@ -88,8 +96,6 @@ from .models import (
     SendEmailAttachment,
     Size,
     Snapshot,
-    Schedule,
-    ScheduleRun,
     SshKey,
     SshState,
     Team,
@@ -455,95 +461,6 @@ class AsyncSsh:
         A key that is not there answers not_found, as a second try does after a first whose answer was lost.
         """
         await self._http.run(_core.one(Call("DELETE", f"{self._path}/keys/{quote(key_id, safe='')}", replay=True)))
-
-
-class AsyncSchedules:
-    """Commands the sandbox runs on a schedule: every so many minutes, hours or days, or as a cron expression says in a time zone.
-
-    The API keeps them, so a run that finds the sandbox stopped starts it, by default, and stops
-    it again when the command ends, keeping its disk. A run that started it leaves it running if
-    someone else began to use it meanwhile.
-    """
-
-    def __init__(self, http: _Http, path: str) -> None:
-        self._http = http
-        self._path = path
-
-    async def list(self) -> list[Schedule]:
-        """The sandbox's schedules, oldest first, each with its last run."""
-        body = await self._http.run(_core.one(Call("GET", self._path, replay=True)))
-        return [build(Schedule, schedule) for schedule in body.get("schedules", [])]
-
-    async def create(
-        self,
-        command: str,
-        *,
-        every: str | None = None,
-        cron: str | None = None,
-        at: str | None = None,
-        name: str | None = None,
-        time_zone: str | None = None,
-        timeout: float | None = None,
-        if_stopped: str | None = None,
-        keep_memory: bool | None = None,
-        overlap: str | None = None,
-        delete_after: bool | None = None,
-        enabled: bool | None = None,
-    ) -> Schedule:
-        """Makes a schedule: what it runs, through sh -c, and every ("15m", "1h", "1d"), cron ("0 7 * * 1-5", in time_zone), or at, once ("2026-11-04T09:00:00Z").
-
-        timeout is how long a run may take, in seconds, up to six hours: 600 unless it says. One that
-        may start the sandbox needs a key that may start and stop it; if_stopped="skip" runs only while it runs.
-        delete_after=True, with at only, deletes the sandbox once the run's command exits 0; a run that
-        fails leaves it, to be looked at. It needs a key that may delete the sandbox.
-        """
-        body = _schedule_body(command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), if_stopped=if_stopped, keep_memory=keep_memory, overlap=overlap, delete_after=delete_after, enabled=enabled)
-        return build(Schedule, await self._http.run(_core.one(Call("POST", self._path, body=body))))
-
-    async def get(self, schedule_id: str) -> Schedule:
-        """A schedule, with its next run and its last."""
-        return build(Schedule, await self._http.run(_core.one(Call("GET", f"{self._path}/{quote(schedule_id, safe='')}", replay=True))))
-
-    async def update(
-        self,
-        schedule_id: str,
-        *,
-        command: str | None = None,
-        every: str | None = None,
-        cron: str | None = None,
-        at: str | None = None,
-        name: str | None = None,
-        time_zone: str | None = None,
-        timeout: float | None = None,
-        if_stopped: str | None = None,
-        keep_memory: bool | None = None,
-        overlap: str | None = None,
-        delete_after: bool | None = None,
-        enabled: bool | None = None,
-    ) -> Schedule:
-        """Changes a schedule. What is left out is as it was; enabled=False pauses it."""
-        body = _schedule_body(command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), if_stopped=if_stopped, keep_memory=keep_memory, overlap=overlap, delete_after=delete_after, enabled=enabled)
-        return build(Schedule, await self._http.run(_core.one(Call("PATCH", f"{self._path}/{quote(schedule_id, safe='')}", body=body, replay=True))))
-
-    async def delete(self, schedule_id: str) -> None:
-        """Deletes a schedule and its runs. A run under way goes on to its end."""
-        await self._http.run(_core.one(Call("DELETE", f"{self._path}/{quote(schedule_id, safe='')}", replay=True)))
-
-    async def run(self, schedule_id: str) -> ScheduleRun:
-        """Makes a run now, by the schedule's own rules, paused or not, and answers as it begins. Its next run does not move."""
-        return build(ScheduleRun, await self._http.run(_core.one(Call("POST", f"{self._path}/{quote(schedule_id, safe='')}/run"))))
-
-    async def runs(self, schedule_id: str, *, limit: int | None = None) -> builtins.list[ScheduleRun]:
-        """Its runs, the latest first: 100 unless limit says, at most 500."""
-        query = {"limit": None if limit is None else str(limit)}
-        body = await self._http.run(_core.one(Call("GET", f"{self._path}/{quote(schedule_id, safe='')}/runs", query=query, replay=True)))
-        return [build(ScheduleRun, run) for run in body.get("runs", [])]
-
-
-def _schedule_body(**fields: Any) -> dict[str, Any]:
-    """A schedule's fields as the API takes them: in its names, with what was not given left out."""
-    names = {"time_zone": "timeZone", "timeout_ms": "timeoutMs", "if_stopped": "ifStopped", "keep_memory": "keepMemory", "delete_after": "deleteAfter"}
-    return {names.get(key, key): value for key, value in fields.items() if value is not None}
 
 
 class AsyncDesktop:
@@ -987,9 +904,15 @@ class AsyncTemplate:
         self.info = build(TemplateInfo, await self._http.run(_core.one(Call("DELETE", f"{self._path}/tags/{_core.tag_segment(tag)}", replay=True))))
         return self
 
-    async def delete(self) -> None:
-        """Deletes it. One that sandboxes are on is refused: put them on another template first."""
-        await self._http.run(_core.one(Call("DELETE", self._path)))
+    async def delete(self, *, pause_jobs: bool = False) -> None:
+        """Deletes it. One that sandboxes are on is refused: put them on another template first.
+
+        Where jobs make their fresh sandboxes from it, the delete is refused with ``in_use_by_jobs``,
+        which names them, unless pause_jobs is true: then it is deleted and they are paused, with
+        the reason "its template was deleted".
+        """
+        query = {"pauseJobs": "true"} if pause_jobs else None
+        await self._http.run(_core.one(Call("DELETE", self._path, query=query)))
 
     async def start(self) -> TemplateStart:
         """What a sandbox made from it starts as."""
@@ -1146,8 +1069,6 @@ class AsyncSandbox:
         self.desktop = AsyncDesktop(http, f"{self._path}/desktop")
         self.browser = AsyncBrowser(http, f"{self._path}/browser")
         self.ssh = AsyncSsh(http, f"{self._path}/ssh")
-        #: Commands it runs on a schedule, started for the run when it is stopped.
-        self.schedules = AsyncSchedules(http, f"{self._path}/schedules")
         #: Its own secrets, on top of its template's. A change is used from its next command, without a restart.
         self.secrets = AsyncSecrets(http, f"{self._path}/secrets")
 
@@ -1494,9 +1415,15 @@ class AsyncSandbox:
         info, fee = await self._http.run(steps)
         return AsyncSandbox(self._http, info, fee)
 
-    async def delete(self) -> None:
-        """Destroys it and its disk for good."""
-        await self._http.run(_core.one(Call("DELETE", self._path, headers={"X-Agental-Confirm-Delete": self.id})))
+    async def delete(self, *, pause_jobs: bool = False) -> None:
+        """Destroys it and its disk for good.
+
+        Where jobs run in it, the delete is refused with ``in_use_by_jobs``, which names them,
+        unless ``pause_jobs`` is true: then it is deleted and they are paused, with the reason
+        "its sandbox was deleted".
+        """
+        query = {"pauseJobs": "true"} if pause_jobs else None
+        await self._http.run(_core.one(Call("DELETE", self._path, headers={"X-Agental-Confirm-Delete": self.id}, query=query)))
 
     async def snapshot(self, name: str | None = None) -> Snapshot:
         """Keeps the sandbox as it is now, to roll back to or to make new sandboxes from."""
@@ -1847,7 +1774,7 @@ def _filter_query(
 
 
 class AsyncBulkActions:
-    """Jobs that act on many sandboxes at once.
+    """Bulk actions: one action on many sandboxes at once.
 
     A preview fixes the sandboxes a filter finds; a job acts on exactly those, checking each again
     just before, and on no other. Answers are the API's, as dictionaries.
@@ -1868,6 +1795,8 @@ class AsyncBulkActions:
 
         filter takes list()'s arguments by name (status="running", tag="ci", metadata={...});
         ids names the sandboxes outright. action is stop, start, archive, snapshot, auto-stop or labels.
+        For a delete, jobsPaused says how many jobs run in them, which it pauses, and
+        jobsPausedNames the first 10 of their names.
         """
         if (filter is None) == (ids is None):
             raise ValueError("preview takes filter or ids, one of them")
@@ -1934,6 +1863,326 @@ def _filter_defaults(given: Mapping[str, Any]) -> dict[str, Any]:
     if unknown:
         raise ValueError(f"filter takes list()'s arguments; not {', '.join(sorted(unknown))}")
     return {name: given.get(name) for name in names}
+
+
+class AsyncJobs:
+    """Commands that run in a kept sandbox, or in a fresh one made from a template for each run: every so many minutes, hours or days, as a cron expression says in a time zone, once, or only when asked.
+
+    The API keeps them, so a run that finds the sandbox stopped starts it, by default, and stops
+    it again when the command ends, keeping its disk. A run that started it leaves it running if
+    someone else began to use it meanwhile. A fresh run's sandbox is deleted after a run that
+    succeeds, and kept, stopped, for keep_failed_for after one that fails. A job is named by its
+    id or its name.
+    """
+
+    def __init__(self, http: _Http) -> None:
+        self._http = http
+        #: A job's HTTP addresses: each starts a run when it is called, from anywhere, with its secret.
+        self.triggers = AsyncJobTriggers(http)
+
+    @staticmethod
+    def _path(id_or_name: str) -> str:
+        return f"/v1/jobs/{quote(id_or_name, safe='')}"
+
+    async def list(self, *, sandbox: str | None = None, template: str | None = None) -> builtins.list[Job]:
+        """The organization's jobs, each with its last run; with sandbox, only those that run in it, and with template, only those that make their fresh sandboxes from it, each by its id or its name."""
+        body = await self._http.run(_core.one(Call("GET", "/v1/jobs", query={"sandbox": sandbox, "template": template}, replay=True)))
+        return [build(Job, job) for job in body.get("jobs", [])]
+
+    async def create(
+        self,
+        body: Mapping[str, Any] | None = None,
+        *,
+        sandbox: str | None = None,
+        template: str | None = None,
+        size: str | None = None,
+        keep_failed_for: str | None = None,
+        command: str | None = None,
+        every: str | None = None,
+        cron: str | None = None,
+        at: str | None = None,
+        name: str | None = None,
+        time_zone: str | None = None,
+        timeout: float | None = None,
+        overlap: str | None = None,
+        if_stopped: str | None = None,
+        after: str | None = None,
+        retries: int | None = None,
+        alerts: str | None = None,
+        enabled: bool | None = None,
+        inputs: Mapping[str, str | None | Mapping[str, Any]] | None = None,
+    ) -> Job:
+        """Makes a job: the sandbox it runs in, by its id or its name, what it runs, through sh -c, and when.
+
+        In place of sandbox, template, by its id or its name, makes a fresh sandbox from it for each
+        run, of size or else the template's, deleted after a run that succeeds; after one that fails
+        it is kept, stopped, for keep_failed_for ("0", "30m", "24h" by default, up to "7d"), then
+        deleted, unless keep_sandbox() keeps it for good. if_stopped and after are for a sandbox
+        you keep only.
+
+        When is every ("15m", "1h", "1d"), cron ("0 7 * * 1-5", in time_zone), at, once
+        ("2026-11-04T09:00:00Z"), or none of them, for a job that runs only when asked. timeout is
+        how long a run may take, in seconds, up to six hours: 600 unless it says. One that may start
+        the sandbox needs a key that may start and stop it; if_stopped="skip" runs only while it runs.
+        after is stop, stop_with_memory, or delete, with at only: the sandbox is deleted once the run's
+        command exits 0, and a run that fails leaves it, to be looked at.
+
+        retries, 0 to 5 and 0 unless it says, tries a run that failed or ran out of time again,
+        after 30 seconds, then 2 minutes, 8, 32 and about 2 hours: each try is a run of its own,
+        with its attempt, and the last fails for good (failed_for_good). alerts says who is told
+        when a run fails for good and when the job works again: "email", the default, its maker and
+        the organization's owners and admins; "webhook", the events job.run_failed and
+        job.recovered; "both"; or "none".
+
+        inputs are the variables a run is given, as its command's environment, by name (upper-case
+        letters, digits and underscores): a default, None for one a run must be given (only on a job
+        that runs when asked), or {"default": ..., "secret": True} for one sealed where it is kept
+        and masked as •••• in output. A run by the clock is given the defaults.
+
+        body is the API's JSON, as POST /v1/jobs takes it; what is given by name goes over it.
+        """
+        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs))
+        return build(Job, await self._http.run(_core.one(Call("POST", "/v1/jobs", body={**(body or {}), **given}))))
+
+    async def get(self, id_or_name: str) -> Job:
+        """A job, with its next run and its last."""
+        return build(Job, await self._http.run(_core.one(Call("GET", self._path(id_or_name), replay=True))))
+
+    async def update(
+        self,
+        id_or_name: str,
+        body: Mapping[str, Any] | None = None,
+        *,
+        sandbox: str | None = None,
+        template: str | None = None,
+        size: str | None = None,
+        keep_failed_for: str | None = None,
+        command: str | None = None,
+        every: str | None = None,
+        cron: str | None = None,
+        at: str | None = None,
+        name: str | None = None,
+        time_zone: str | None = None,
+        timeout: float | None = None,
+        overlap: str | None = None,
+        if_stopped: str | None = None,
+        after: str | None = None,
+        retries: int | None = None,
+        alerts: str | None = None,
+        enabled: bool | None = None,
+        inputs: Mapping[str, str | None | Mapping[str, Any]] | None = None,
+    ) -> Job:
+        """Changes a job. What is left out is as it was; enabled=False pauses it, and drops a retry that waits.
+
+        sandbox, or template and size, moves it to another sandbox, or to fresh sandboxes from
+        another template; keep_failed_for is a fresh job's only. retries, alerts and inputs are as
+        create() takes them; inputs given replace the ones the job had.
+
+        body is the API's JSON, as PATCH /v1/jobs/{id} takes it, where a null clears every, cron or at;
+        what is given by name goes over it.
+        """
+        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs))
+        return build(Job, await self._http.run(_core.one(Call("PATCH", self._path(id_or_name), body={**(body or {}), **given}, replay=True))))
+
+    async def pause(self, id_or_name: str) -> Job:
+        """Pauses a job: no run comes due until it is resumed. run() still makes one."""
+        return await self.update(id_or_name, enabled=False)
+
+    async def resume(self, id_or_name: str) -> Job:
+        """Resumes a paused job, and clears why it paused itself."""
+        return await self.update(id_or_name, enabled=True)
+
+    async def delete(self, id_or_name: str) -> None:
+        """Deletes a job and its runs. A run under way goes on to its end."""
+        await self._http.run(_core.one(Call("DELETE", self._path(id_or_name), replay=True)))
+
+    async def put(
+        self,
+        name: str,
+        body: Mapping[str, Any] | None = None,
+        *,
+        sandbox: str | None = None,
+        template: str | None = None,
+        size: str | None = None,
+        keep_failed_for: str | None = None,
+        command: str | None = None,
+        every: str | None = None,
+        cron: str | None = None,
+        at: str | None = None,
+        time_zone: str | None = None,
+        timeout: float | None = None,
+        overlap: str | None = None,
+        if_stopped: str | None = None,
+        after: str | None = None,
+        retries: int | None = None,
+        alerts: str | None = None,
+        enabled: bool | None = None,
+        inputs: Mapping[str, str | None | Mapping[str, Any]] | None = None,
+    ) -> JobPut:
+        """Makes the job of this name, or changes it to exactly this: whatever is left out goes back to its default, as on a new job.
+
+        It takes what create() takes, but its name, which is the job's. The same job put twice
+        changes nothing. Answers the job, whether it was made (created), and whether it changed:
+        what agental job apply does for each job of a file.
+
+        body is the API's JSON, as PUT /v1/jobs/{name} takes it; what is given by name goes over it.
+        """
+        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs))
+        answer = await self._http.run(_core.answered(Call("PUT", self._path(name), body={**(body or {}), **given}, replay=True)))
+        created = answer.status == 201
+        return JobPut(job=build(Job, answer.body), created=created, changed=created or answer.headers.get("agental-changed") != "false")
+
+    @overload
+    async def run(self, id_or_name: str, *, inputs: Mapping[str, str] | None = None, wait: None = None) -> JobRun: ...
+
+    @overload
+    async def run(self, id_or_name: str, *, inputs: Mapping[str, str] | None = None, wait: float) -> JobRunWithOutput: ...
+
+    async def run(self, id_or_name: str, *, inputs: Mapping[str, str] | None = None, wait: float | None = None) -> JobRun | JobRunWithOutput:
+        """Makes a run now, by the job's own rules, paused or not, and answers as it begins. Its next run does not move.
+
+        inputs gives values for the job's inputs, by name, over their defaults: one the job does
+        not name is refused with unknown_input, and one it needs and was not given with
+        input_required. With wait, in seconds, the API holds the call until the run ends, up to 300
+        seconds of it, and the run is read after that until it has ended; it is answered with its
+        output. One still running after wait raises AgentalTimeoutError, and goes on.
+        """
+        body = None if inputs is None else {"inputs": dict(inputs)}
+        return await self._made(f"{self._path(id_or_name)}/run", body, wait)
+
+    @overload
+    async def run_again(self, id_or_name: str, run_id: str, *, wait: None = None) -> JobRun: ...
+
+    @overload
+    async def run_again(self, id_or_name: str, run_id: str, *, wait: float) -> JobRunWithOutput: ...
+
+    async def run_again(self, id_or_name: str, run_id: str, *, wait: float | None = None) -> JobRun | JobRunWithOutput:
+        """Runs the job again now with what one of its runs was given, its secret inputs too; an input the job no longer names is left out. wait is as run() takes it."""
+        return await self._made(f"{self._path(id_or_name)}/runs/{quote(run_id, safe='')}/again", None, wait)
+
+    async def _made(self, path: str, body: dict[str, Any] | None, wait: float | None) -> JobRun | JobRunWithOutput:
+        run, with_output = await self._http.run(_core.run_job(path, body, wait, self._http.config))
+        return build(JobRunWithOutput, run) if with_output else build(JobRun, run)
+
+    async def runs(self, id_or_name: str, *, limit: int | None = None) -> builtins.list[JobRun]:
+        """Its runs, the latest first: 100 unless limit says, at most 500.
+
+        Each try its retries make is a run of its own: attempt is 1 for the first, and
+        failed_for_good marks the one with no tries left.
+        """
+        query = {"limit": None if limit is None else str(limit)}
+        body = await self._http.run(_core.one(Call("GET", f"{self._path(id_or_name)}/runs", query=query, replay=True)))
+        return [build(JobRun, run) for run in body.get("runs", [])]
+
+    async def run_output(self, id_or_name: str, run_id: str) -> JobRunWithOutput:
+        """One of its runs, with the last of what its command wrote to stdout and stderr; stdout_cut and stderr_cut say where that is the end of more."""
+        path = f"{self._path(id_or_name)}/runs/{quote(run_id, safe='')}"
+        return build(JobRunWithOutput, await self._http.run(_core.one(Call("GET", path, replay=True))))
+
+    async def keep_sandbox(self, id_or_name: str, run_id: str) -> JobRun:
+        """Keep it: makes the sandbox of a failed fresh run, kept stopped until keep_until, an ordinary sandbox of yours, out of the job.
+
+        It is no longer deleted when keep_failed_for passes. Answers the run, with sandbox_kept
+        true. A run in a sandbox you keep is refused with not_fresh, one still running with
+        run_running, and one whose sandbox is gone with sandbox_gone.
+        """
+        path = f"{self._path(id_or_name)}/runs/{quote(run_id, safe='')}/keep-sandbox"
+        return build(JobRun, await self._http.run(_core.one(Call("POST", path, replay=True))))
+
+    async def calls(self, id_or_name: str) -> builtins.list[RefusedJobCall]:
+        """The calls of the job's addresses that were refused in the last 7 days, the latest first, 100 at most, each with why.
+
+        Why is a secret or signature that was not right, too many calls, the job paused, or an
+        input it needs not given: what answers "my webhook did not fire".
+        """
+        body = await self._http.run(_core.one(Call("GET", f"{self._path(id_or_name)}/calls", replay=True)))
+        return [build(RefusedJobCall, call) for call in body.get("calls", [])]
+
+    async def usage(self, *, since: str | datetime | None = None, until: str | datetime | None = None) -> JobUsage:
+        """The runs due in a window, this month's unless since and until say, by job, and the running time they came to."""
+        query = {"since": _core.iso(since), "until": _core.iso(until)}
+        return build(JobUsage, await self._http.run(_core.one(Call("GET", "/v1/usage/jobs", query=query, replay=True))))
+
+
+class AsyncJobTriggers:
+    """A job's HTTP addresses. A POST to a trigger's url starts a run of its job, from anywhere, with no API key.
+
+    The caller sends the trigger's secret as Authorization: Bearer, or signs the body with it as
+    GitHub (X-Hub-Signature-256), Stripe (Stripe-Signature) or any sender of an HMAC-SHA256 header
+    does. The fields of a JSON body that the job names in its inputs are given to the run, and the
+    whole request is a file its command reads at $AGENTAL_REQUEST. A run a call starts has
+    started_by "http". Each takes the job's id or its name.
+    """
+
+    def __init__(self, http: _Http) -> None:
+        self._http = http
+
+    @staticmethod
+    def _path(id_or_name: str, trigger_id: str | None = None) -> str:
+        path = f"/v1/jobs/{quote(id_or_name, safe='')}/triggers"
+        return path if trigger_id is None else f"{path}/{quote(trigger_id, safe='')}"
+
+    async def list(self, id_or_name: str) -> builtins.list[JobTrigger]:
+        """The job's triggers, oldest first. Their secrets are never shown again."""
+        body = await self._http.run(_core.one(Call("GET", self._path(id_or_name), replay=True)))
+        return [build(JobTrigger, trigger) for trigger in body.get("triggers", [])]
+
+    async def create(
+        self,
+        id_or_name: str,
+        *,
+        signature: Literal["bearer", "github", "stripe", "hmac-sha256"] | None = None,
+        header: str | None = None,
+        respond: Literal["accepted", "wait"] | None = None,
+        rate_per_minute: int | None = None,
+        signing_secret: str | None = None,
+    ) -> JobTriggerWithSecret:
+        """Gives the job an HTTP address, and answers it with its secret, which is shown this once: keep it.
+
+        signature is bearer unless given; github, stripe, or hmac-sha256, whose header is
+        X-Signature unless given. respond is accepted, answered at once with the run's id, unless
+        given; wait holds a call until the run ends, up to 60 seconds. rate_per_minute is 60
+        unless given, 600 at most. Needs a key that may change the job.
+        """
+        body = {key: value for key, value in {"signature": signature, "header": header, "respond": respond, "ratePerMinute": rate_per_minute, "signingSecret": signing_secret}.items() if value is not None}
+        return build(JobTriggerWithSecret, await self._http.run(_core.one(Call("POST", self._path(id_or_name), body=body))))
+
+    async def update(
+        self, id_or_name: str, trigger_id: str, *, respond: Literal["accepted", "wait"] | None = None, rate_per_minute: int | None = None, signing_secret: str | None = None
+    ) -> JobTrigger:
+        """Changes how a trigger answers and how many calls a minute it takes, or sets the secret a sender signs with where it makes its own, as Stripe does (whsec_...). Its address and its secret stay."""
+        body = {key: value for key, value in {"respond": respond, "ratePerMinute": rate_per_minute, "signingSecret": signing_secret}.items() if value is not None}
+        return build(JobTrigger, await self._http.run(_core.one(Call("PATCH", self._path(id_or_name, trigger_id), body=body, replay=True))))
+
+    async def rotate(self, id_or_name: str, trigger_id: str) -> JobTriggerWithSecret:
+        """Gives a trigger a new secret, at once: the old one no longer calls it. Its address stays. Answers the new secret, shown this once."""
+        return build(JobTriggerWithSecret, await self._http.run(_core.one(Call("POST", f"{self._path(id_or_name, trigger_id)}/rotate"))))
+
+    async def delete(self, id_or_name: str, trigger_id: str) -> None:
+        """Deletes a trigger: its address no longer starts a run."""
+        await self._http.run(_core.one(Call("DELETE", self._path(id_or_name, trigger_id), replay=True)))
+
+
+def _job_target(sandbox: str | None, template: str | None, size: str | None) -> dict[str, str] | None:
+    """A job's target as the API takes it: a sandbox it keeps, or a template (and a size) for a fresh sandbox at each run. None where neither was given."""
+    if sandbox is not None and template is not None:
+        raise ValueError("Give sandbox, for a sandbox you keep, or template, for a fresh sandbox at each run: not both.")
+    if size is not None and template is None:
+        raise ValueError("size is the size of each fresh sandbox, and goes with template.")
+    if template is not None:
+        return {"template": template, **({} if size is None else {"size": size})}
+    return None if sandbox is None else {"sandbox": sandbox}
+
+
+def _inputs(inputs: Mapping[str, str | None | Mapping[str, Any]] | None) -> dict[str, Any] | None:
+    """A job's inputs as the API takes them: each a default, None for one a run must be given, or {"default": ..., "secret": True}."""
+    return None if inputs is None else {name: dict(spec) if isinstance(spec, Mapping) else spec for name, spec in inputs.items()}
+
+
+def _job_body(**fields: Any) -> dict[str, Any]:
+    """A job's fields as the API takes them: in its names, with what was not given left out."""
+    names = {"time_zone": "timeZone", "timeout_ms": "timeoutMs", "if_stopped": "ifStopped", "keep_failed_for": "keepFailedFor"}
+    return {names.get(key, key): value for key, value in fields.items() if value is not None}
 
 
 class AsyncSandboxPage:
@@ -2136,8 +2385,16 @@ class AsyncAgental:
         self.api_keys = AsyncApiKeys(self._http)
         #: The organizations the key's person is in, and the members and invites of a team.
         self.organizations = AsyncOrganizations(self._http)
-        #: Jobs that act on many sandboxes at once: a preview fixes the set, a job acts on exactly it.
+        #: Bulk actions on many sandboxes at once: a preview fixes the set, an action acts on exactly it.
         self.bulk_actions = AsyncBulkActions(self._http)
+        #: Commands that run in a kept sandbox on a clock, once, or when asked, and their runs.
+        self.jobs = AsyncJobs(self._http)
+
+    async def job_runs(self, *, limit: int | None = None, job: str | None = None, outcome: str | None = None) -> list[JobRun]:
+        """The organization's job runs, the latest first: 100 unless limit says, at most 500; with job, by its id or name, only its; with outcome, only those that ended so, or are running."""
+        query = {"limit": None if limit is None else str(limit), "job": job, "outcome": outcome}
+        body = await self._http.run(_core.one(Call("GET", "/v1/job-runs", query=query, replay=True)))
+        return [build(JobRun, run) for run in body.get("runs", [])]
 
     async def regions(self) -> list[Region]:
         """The regions sandboxes can be made in now, the default first, with the sizes each has room for."""

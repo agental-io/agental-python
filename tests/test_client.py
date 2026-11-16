@@ -19,11 +19,13 @@ from agental import (
     Agental,
     AgentalConnectionError,
     AgentalError,
+    AgentalTimeoutError,
     ApiError,
     Egress,
     AsyncAgental,
     ExecEvent,
     HiddenVariable,
+    JobInput,
     PlainVariable,
     ProxyError,
     SendEmailAttachment,
@@ -408,6 +410,18 @@ def test_a_delete_says_which_sandbox_it_means() -> None:
     agental.sandboxes.get(ID).delete()
     assert script.sent[1].method == "DELETE"
     assert script.sent[1].headers["x-agental-confirm-delete"] == ID
+    assert "pauseJobs" not in str(script.sent[1].url)
+
+
+def test_a_delete_of_a_sandbox_that_jobs_run_in_pauses_them_only_when_asked() -> None:
+    agental, script = scripted(answer(200, sandbox()), refusal(409, "in_use_by_jobs"), answer(204))
+    box = agental.sandboxes.get(ID)
+    with pytest.raises(ApiError, match="in_use_by_jobs"):
+        box.delete()
+    box.delete(pause_jobs=True)
+    assert script.sent[2].method == "DELETE"
+    assert script.sent[2].url.params["pauseJobs"] == "true"
+    assert script.sent[2].headers["x-agental-confirm-delete"] == ID
 
 
 def test_a_start_waits_for_a_sandbox_that_is_brought_back_and_says_why_one_was_not() -> None:
@@ -2238,56 +2252,268 @@ def test_a_teams_members_and_invites_are_read_and_changed_through_organizations(
     assert (script.sent[9].method, script.sent[9].url.path) == ("DELETE", "/v1/invites/inv_1")
 
 
-def test_a_sandboxs_schedules_are_listed_made_read_changed_run_their_runs_read_and_deleted() -> None:
-    run = {"id": "run_1", "scheduleId": "sch_1", "sandboxId": ID, "dueAt": "2026-11-03T16:00:00.000Z", "startedAt": None, "finishedAt": None, "outcome": "running", "reason": None, "exitCode": None, "commandId": None, "startedSandbox": False, "stoppedSandbox": None}
-    schedule = {
-        "id": "sch_1", "sandboxId": ID, "name": "scrape", "command": "python scrape.py", "every": "1h", "cron": None, "timeZone": "UTC",
-        "timeoutMs": 600000, "ifStopped": "start", "keepMemory": False, "overlap": "skip", "enabled": True,
-        "nextRunAt": "2026-11-03T17:00:00.000Z", "lastRun": run, "createdAt": "2026-11-03T16:00:00.000Z", "updatedAt": "2026-11-03T16:00:00.000Z",
+def job_run(**changes: Any) -> dict[str, Any]:
+    return {
+        "id": "run_1", "jobId": "job_1", "jobName": "scrape", "sandboxId": ID, "dueAt": "2026-11-03T16:00:00.000Z", "startedAt": None, "finishedAt": None,
+        "outcome": "running", "reason": None, "exitCode": None, "commandId": None, "startedSandbox": False, "stoppedSandbox": None, "deletedSandbox": False,
+        "startedBy": "api", **changes,
     }
+
+
+def job(**changes: Any) -> dict[str, Any]:
+    return {
+        "id": "job_1", "name": "scrape", "target": {"sandbox": ID, "sandboxName": "agent-1"}, "command": "python scrape.py", "every": "1h", "cron": None, "at": None,
+        "timeZone": "UTC", "timeoutMs": 600000, "overlap": "skip", "ifStopped": "start", "after": "stop", "enabled": True, "pausedReason": None,
+        "nextRunAt": "2026-11-03T17:00:00.000Z", "lastRun": job_run(), "madeBy": {"kind": "key", "name": "ci"},
+        "createdAt": "2026-11-03T16:00:00.000Z", "updatedAt": "2026-11-03T16:00:00.000Z", **changes,
+    }
+
+
+def test_jobs_are_listed_made_read_changed_paused_resumed_run_their_runs_read_and_deleted() -> None:
     agental, script = scripted(
-        answer(200, sandbox()),
-        answer(200, {"schedules": [schedule]}),
-        answer(201, schedule),
-        answer(200, schedule),
-        answer(200, {**schedule, "enabled": False, "nextRunAt": None}),
-        answer(202, run),
-        answer(200, {"runs": [run]}),
+        answer(200, {"jobs": [job()]}),
+        answer(201, job()),
+        answer(200, job()),
+        answer(200, job(enabled=False, nextRunAt=None)),
+        answer(200, job(enabled=False, nextRunAt=None)),
+        answer(200, job()),
+        answer(202, job_run()),
+        answer(200, {"runs": [job_run()]}),
+        answer(200, job_run(outcome="succeeded", exitCode=0, stdout="ok\n", stderr="")),
         answer(204),
     )
-    box = agental.sandboxes.get(ID)
-    at = f"/v1/sandboxes/{ID}/schedules"
 
-    listed = box.schedules.list()
-    assert (listed[0].id, listed[0].last_run.outcome if listed[0].last_run else None) == ("sch_1", "running")
-    assert (script.sent[1].method, script.sent[1].url.path) == ("GET", at)
-    assert box.schedules.create("python scrape.py", every="1h", name="scrape", if_stopped="start", keep_memory=True, timeout=1800).every == "1h"
-    assert (script.sent[2].method, script.body(2)) == ("POST", {"command": "python scrape.py", "every": "1h", "name": "scrape", "timeoutMs": 1800000, "ifStopped": "start", "keepMemory": True})
-    assert box.schedules.get("sch_1").time_zone == "UTC"
-    assert (script.sent[3].method, script.sent[3].url.path) == ("GET", f"{at}/sch_1")
-    assert box.schedules.update("sch_1", enabled=False).next_run_at is None
+    listed = agental.jobs.list(sandbox="agent-1")
+    assert (listed[0].id, listed[0].target.sandbox_name, listed[0].made_by.kind, listed[0].last_run.outcome if listed[0].last_run else None) == ("job_1", "agent-1", "key", "running")
+    assert (script.sent[0].method, script.sent[0].url.path, script.sent[0].url.query) == ("GET", "/v1/jobs", b"sandbox=agent-1")
+    made = agental.jobs.create(sandbox="agent-1", command="python scrape.py", every="1h", name="scrape", if_stopped="start", after="stop_with_memory", timeout=1800)
+    assert made.every == "1h"
+    assert (script.sent[1].method, script.sent[1].url.path, script.body(1)) == (
+        "POST", "/v1/jobs", {"target": {"sandbox": "agent-1"}, "command": "python scrape.py", "every": "1h", "name": "scrape", "timeoutMs": 1800000, "ifStopped": "start", "after": "stop_with_memory"},
+    )
+    assert agental.jobs.get("scrape").time_zone == "UTC"
+    assert (script.sent[2].method, script.sent[2].url.path) == ("GET", "/v1/jobs/scrape")
+    assert agental.jobs.update("job_1", enabled=False).next_run_at is None
+    assert (script.sent[3].method, script.sent[3].url.path, script.body(3)) == ("PATCH", "/v1/jobs/job_1", {"enabled": False})
+    assert agental.jobs.pause("scrape").enabled is False
     assert (script.sent[4].method, script.body(4)) == ("PATCH", {"enabled": False})
-    assert box.schedules.run("sch_1").started_sandbox is False
-    assert (script.sent[5].method, script.sent[5].url.path) == ("POST", f"{at}/sch_1/run")
-    assert [one.id for one in box.schedules.runs("sch_1", limit=5)] == ["run_1"]
-    assert (script.sent[6].method, script.sent[6].url.path, script.sent[6].url.query) == ("GET", f"{at}/sch_1/runs", b"limit=5")
-    box.schedules.delete("sch_1")
-    assert (script.sent[7].method, script.sent[7].url.path) == ("DELETE", f"{at}/sch_1")
+    assert agental.jobs.resume("scrape").enabled is True
+    assert (script.sent[5].method, script.body(5)) == ("PATCH", {"enabled": True})
+    started = agental.jobs.run("scrape")
+    assert (started.outcome, started.started_by) == ("running", "api")
+    assert (script.sent[6].method, script.sent[6].url.path) == ("POST", "/v1/jobs/scrape/run")
+    assert [one.id for one in agental.jobs.runs("scrape", limit=5)] == ["run_1"]
+    assert (script.sent[7].method, script.sent[7].url.path, script.sent[7].url.query) == ("GET", "/v1/jobs/scrape/runs", b"limit=5")
+    output = agental.jobs.run_output("scrape", "run_1")
+    assert (output.stdout, output.exit_code) == ("ok\n", 0)
+    assert (script.sent[8].method, script.sent[8].url.path) == ("GET", "/v1/jobs/scrape/runs/run_1")
+    agental.jobs.delete("scrape")
+    assert (script.sent[9].method, script.sent[9].url.path) == ("DELETE", "/v1/jobs/scrape")
 
 
-def test_a_schedule_that_runs_once_is_asked_to_delete_its_sandbox_after_and_its_run_says_it_did() -> None:
-    run = {"id": "run_1", "scheduleId": "sch_1", "sandboxId": ID, "dueAt": "2026-11-04T09:00:20.000Z", "startedAt": "2026-11-04T09:00:21.000Z", "finishedAt": "2026-11-04T09:00:30.000Z", "outcome": "succeeded", "reason": None, "exitCode": 0, "commandId": "cmd_1", "startedSandbox": False, "stoppedSandbox": None, "deletedSandbox": True}
-    schedule = {
-        "id": "sch_1", "sandboxId": ID, "name": "last", "command": "./finish.sh", "every": None, "cron": None, "at": "2026-11-04T09:00:00.000Z", "timeZone": "UTC",
-        "timeoutMs": 600000, "ifStopped": "start", "keepMemory": False, "overlap": "skip", "deleteAfter": True, "enabled": True,
-        "nextRunAt": None, "pausedReason": None, "lastRun": run, "createdAt": "2026-11-03T16:00:00.000Z", "updatedAt": "2026-11-03T16:00:00.000Z",
+def test_a_jobs_triggers_are_listed_made_with_their_secret_changed_rotated_and_deleted_and_its_refused_calls_read() -> None:
+    trigger = {
+        "id": "trg_1",
+        "jobId": "job_1",
+        "url": "https://agental.run/trg_1",
+        "signature": "hmac-sha256",
+        "header": "x-signature",
+        "respond": "accepted",
+        "ratePerMinute": 60,
+        "createdAt": "2026-11-16T10:00:00.000Z",
+        "rotatedAt": None,
     }
-    agental, script = scripted(answer(200, sandbox()), answer(201, schedule), answer(200, {"runs": [run]}))
-    box = agental.sandboxes.get(ID)
-    made = box.schedules.create("./finish.sh", at="2026-11-04T09:00:00Z", delete_after=True)
-    assert made.delete_after is True
-    assert script.body(1) == {"command": "./finish.sh", "at": "2026-11-04T09:00:00Z", "deleteAfter": True}
-    assert box.schedules.runs("sch_1")[0].deleted_sandbox is True
+    agental, script = scripted(
+        answer(200, {"triggers": [trigger]}),
+        answer(201, {"trigger": trigger, "secret": "jts_first"}),
+        answer(201, {"trigger": {**trigger, "id": "trg_2", "signature": "bearer", "header": None}, "secret": "jts_plain"}),
+        answer(200, {**trigger, "respond": "wait", "ratePerMinute": 10}),
+        answer(200, {"trigger": {**trigger, "rotatedAt": "2026-11-16T11:00:00.000Z"}, "secret": "jts_second"}),
+        answer(204),
+        answer(200, {"calls": [{"id": "call_1", "triggerId": "trg_1", "at": "2026-11-16T10:05:00.000Z", "status": 401, "reason": "no x-signature header was sent", "from": "203.0.113.9"}]}),
+    )
+
+    listed = agental.jobs.triggers.list("report")
+    assert (listed[0].url, listed[0].rate_per_minute, listed[0].rotated_at) == ("https://agental.run/trg_1", 60, None)
+    assert (script.sent[0].method, script.sent[0].url.path) == ("GET", "/v1/jobs/report/triggers")
+    made = agental.jobs.triggers.create("report", signature="hmac-sha256", header="X-Signature", rate_per_minute=60)
+    assert (made.secret, made.trigger.header) == ("jts_first", "x-signature")
+    assert (script.sent[1].method, script.sent[1].url.path, script.body(1)) == ("POST", "/v1/jobs/report/triggers", {"signature": "hmac-sha256", "header": "X-Signature", "ratePerMinute": 60})
+    # Given nothing, it makes a bearer trigger with the API's defaults.
+    assert agental.jobs.triggers.create("report").trigger.signature == "bearer"
+    assert (script.sent[2].method, script.body(2)) == ("POST", {})
+    changed = agental.jobs.triggers.update("report", "trg_1", respond="wait", rate_per_minute=10)
+    assert (changed.respond, changed.rate_per_minute) == ("wait", 10)
+    assert (script.sent[3].method, script.sent[3].url.path, script.body(3)) == ("PATCH", "/v1/jobs/report/triggers/trg_1", {"respond": "wait", "ratePerMinute": 10})
+    rotated = agental.jobs.triggers.rotate("report", "trg_1")
+    assert (rotated.secret, rotated.trigger.rotated_at) == ("jts_second", "2026-11-16T11:00:00.000Z")
+    assert (script.sent[4].method, script.sent[4].url.path) == ("POST", "/v1/jobs/report/triggers/trg_1/rotate")
+    agental.jobs.triggers.delete("report", "trg_1")
+    assert (script.sent[5].method, script.sent[5].url.path) == ("DELETE", "/v1/jobs/report/triggers/trg_1")
+    refused = agental.jobs.calls("report")
+    assert (refused[0].status, refused[0].from_, refused[0].trigger_id) == (401, "203.0.113.9", "trg_1")
+    assert (script.sent[6].method, script.sent[6].url.path) == ("GET", "/v1/jobs/report/calls")
+
+
+def test_a_job_is_made_from_the_apis_json_with_named_fields_over_it_and_a_null_clears_its_clock() -> None:
+    agental, script = scripted(answer(201, job(every=None, at="2026-11-04T09:00:00.000Z", after="delete")), answer(200, job(every=None, nextRunAt=None)))
+    made = agental.jobs.create({"target": {"sandbox": ID}, "command": "./finish.sh", "at": "2026-11-04T09:00:00Z", "after": "delete"}, command="./last.sh")
+    assert made.after == "delete"
+    assert script.body(0) == {"target": {"sandbox": ID}, "command": "./last.sh", "at": "2026-11-04T09:00:00Z", "after": "delete"}
+    agental.jobs.update("job_1", {"every": None})
+    assert script.body(1) == {"every": None}
+
+
+def test_a_run_waited_for_is_read_until_it_ends_and_answered_with_its_output() -> None:
+    agental, script = scripted(
+        answer(202, job_run(id="run_2")),
+        answer(200, job_run(id="run_2", stdout="", stderr="")),
+        answer(200, job_run(id="run_2", outcome="succeeded", exitCode=0, commandId="cmd_1", deletedSandbox=True, stdout="done\n", stderr="")),
+    )
+    ended = agental.jobs.run("scrape", wait=60)
+    assert (ended.outcome, ended.stdout, ended.deleted_sandbox) == ("succeeded", "done\n", True)
+    # The API held the call for 60 seconds and answered 202: the run still went, and is read until it ends.
+    assert [(each.method, each.url.path, each.url.query) for each in script.sent] == [
+        ("POST", "/v1/jobs/scrape/run", b"wait=60"), ("GET", "/v1/jobs/job_1/runs/run_2", b""), ("GET", "/v1/jobs/job_1/runs/run_2", b""),
+    ]
+
+
+def test_a_run_still_running_when_the_wait_is_over_raises_a_timeout() -> None:
+    script = Script(answer(202, job_run()), answer(200, job_run(stdout=None, stderr=None)))
+    agental = Agental("key_test", base_url="https://api.test/", poll_interval=5, http_client=httpx.Client(transport=httpx.MockTransport(script)))
+    with pytest.raises(AgentalTimeoutError, match="run_1 was still running after 1 s"):
+        agental.jobs.run("scrape", wait=1)
+    assert len(script.sent) == 2
+
+
+def test_a_job_is_made_with_inputs_and_a_run_is_given_values_over_them_and_with_wait_a_200_is_the_run_ended_with_its_output() -> None:
+    inputs = {"REPORT_DAY": {"default": "yesterday", "secret": False}, "API_TOKEN": {"default": "••••", "secret": True}, "REGION": {"default": None, "secret": False}}
+    ended = job_run(id="run_2", outcome="succeeded", exitCode=0, finishedAt="2026-11-03T16:00:05.000Z", inputs={"REPORT_DAY": "2026-11-15", "API_TOKEN": "••••", "REGION": "eu"}, stdout="ok\n", stderr="")
+    agental, script = scripted(
+        answer(201, job(every=None, nextRunAt=None, inputs=inputs)),
+        answer(200, ended),
+        answer(202, job_run(id="run_3", inputs={"REGION": "eu"})),
+        answer(202, job_run(id="run_4")),
+        answer(200, {**ended, "id": "run_4"}),
+        answer(202, job_run(id="run_5")),
+    )
+    made = agental.jobs.create(sandbox="agent-1", command="./report.sh", name="report", inputs={"REPORT_DAY": "yesterday", "API_TOKEN": {"default": "s3cret", "secret": True}, "REGION": None})
+    assert script.body(0) == {"target": {"sandbox": "agent-1"}, "command": "./report.sh", "name": "report", "inputs": {"REPORT_DAY": "yesterday", "API_TOKEN": {"default": "s3cret", "secret": True}, "REGION": None}}
+    assert made.inputs["API_TOKEN"] == JobInput(default="••••", secret=True)
+    assert made.inputs["REGION"].default is None
+
+    run = agental.jobs.run("report", inputs={"REPORT_DAY": "2026-11-15", "REGION": "eu"}, wait=600)
+    assert (run.stdout, run.inputs["API_TOKEN"]) == ("ok\n", "••••")
+    # A wait longer than a call is held asks for 90 seconds; a 200 is the run ended, read no more.
+    assert (script.sent[1].method, script.sent[1].url.path, script.sent[1].url.query, script.body(1)) == ("POST", "/v1/jobs/report/run", b"wait=90", {"inputs": {"REPORT_DAY": "2026-11-15", "REGION": "eu"}})
+
+    started = agental.jobs.run("report", inputs={"REGION": "eu"})
+    assert (started.outcome, started.inputs) == ("running", {"REGION": "eu"})
+    assert (script.sent[2].url.query, script.body(2)) == (b"", {"inputs": {"REGION": "eu"}})
+
+    again = agental.jobs.run_again("report", "run_2", wait=30)
+    assert again.stdout == "ok\n"
+    assert [(each.method, each.url.path, each.url.query) for each in script.sent[3:5]] == [("POST", "/v1/jobs/report/runs/run_2/again", b"wait=30"), ("GET", "/v1/jobs/job_1/runs/run_4", b"")]
+    assert agental.jobs.run_again("report", "run_2").id == "run_5"
+    assert (script.sent[5].url.path, script.sent[5].content) == ("/v1/jobs/report/runs/run_2/again", b"")
+
+
+def test_a_job_is_put_by_its_name_made_changed_or_as_it_was_as_the_status_and_agental_changed_say() -> None:
+    agental, script = scripted(
+        answer(201, job(name="nightly")),
+        answer(200, job(name="nightly"), **{"Agental-Changed": "true"}),
+        answer(200, job(name="nightly"), **{"Agental-Changed": "false"}),
+    )
+    made = agental.jobs.put("nightly", sandbox="agent-1", command="npm test", cron="0 3 * * *", inputs={"TOKEN": {"secret": True}})
+    assert (made.created, made.changed, made.job.name) == (True, True, "nightly")
+    assert (script.sent[0].method, script.sent[0].url.path, script.body(0)) == ("PUT", "/v1/jobs/nightly", {"target": {"sandbox": "agent-1"}, "command": "npm test", "cron": "0 3 * * *", "inputs": {"TOKEN": {"secret": True}}})
+    changed = agental.jobs.put("nightly", {"target": {"sandbox": "agent-1"}, "command": "npm test"})
+    assert (changed.created, changed.changed) == (False, True)
+    same = agental.jobs.put("nightly", {"target": {"sandbox": "agent-1"}, "command": "npm test"})
+    assert (same.created, same.changed) == (False, False)
+
+
+def test_a_job_on_fresh_sandboxes_is_made_from_a_template_listed_by_it_and_a_failed_runs_kept_sandbox_is_kept_for_good() -> None:
+    fresh = job(
+        name="tests", target={"sandbox": None, "sandboxName": None, "template": "tpl_0000000000000002", "templateName": "coding-agent", "size": "medium"},
+        ifStopped=None, after=None, keepFailedFor="30m", lastRun=None,
+    )
+    failed = job_run(fresh=True, sandboxId="sbx_00000000000000f1", outcome="failed", exitCode=1, finishedAt="2026-11-03T16:00:05.000Z", keepUntil="2026-11-03T16:30:05.000Z", sandboxKept=False)
+    agental, script = scripted(
+        answer(201, fresh),
+        answer(200, {"jobs": [fresh]}),
+        answer(200, {"runs": [failed]}),
+        answer(200, {**failed, "stdout": "...3 failed\n", "stderr": "", "stdoutCut": True, "stderrCut": False, "outputHidden": False}),
+        answer(200, {**failed, "keepUntil": None, "sandboxKept": True}),
+        refusal(409, "not_fresh"),
+    )
+    made = agental.jobs.create(template="coding-agent", size="medium", keep_failed_for="30m", command="npm test", every="1h", name="tests")
+    assert (script.sent[0].method, script.sent[0].url.path, script.body(0)) == (
+        "POST", "/v1/jobs", {"target": {"template": "coding-agent", "size": "medium"}, "keepFailedFor": "30m", "command": "npm test", "every": "1h", "name": "tests"},
+    )
+    assert (made.target.sandbox, made.target.template_name, made.target.size, made.keep_failed_for, made.if_stopped, made.after) == (None, "coding-agent", "medium", "30m", None, None)
+    agental.jobs.list(template="coding-agent")
+    assert (script.sent[1].method, script.sent[1].url.path, script.sent[1].url.query) == ("GET", "/v1/jobs", b"template=coding-agent")
+    last = agental.jobs.runs("tests")[0]
+    assert (last.fresh, last.keep_until, last.sandbox_kept) == (True, "2026-11-03T16:30:05.000Z", False)
+    output = agental.jobs.run_output("tests", last.id)
+    assert (output.stdout_cut, output.stderr_cut) == (True, False)
+    kept = agental.jobs.keep_sandbox("tests", last.id)
+    assert (script.sent[4].method, script.sent[4].url.path) == ("POST", "/v1/jobs/tests/runs/run_1/keep-sandbox")
+    assert (kept.sandbox_kept, kept.keep_until) == (True, None)
+    with pytest.raises(ApiError, match="not_fresh"):
+        agental.jobs.keep_sandbox("scrape", "run_2")
+    # Both a sandbox and a template, or a size without a template, is refused before anything is sent.
+    with pytest.raises(ValueError, match="not both"):
+        agental.jobs.create(sandbox="agent-1", template="coding-agent", command="true")
+    with pytest.raises(ValueError, match="goes with template"):
+        agental.jobs.update("tests", sandbox="agent-1", size="small")
+    assert len(script.sent) == 6
+    agental, script = scripted(answer(200, job(target={"sandbox": None, "sandboxName": None, "template": "tpl_0000000000000002", "templateName": "coding-agent", "size": None})))
+    agental.jobs.update("nightly", template="coding-agent")
+    assert (script.sent[0].method, script.body(0)) == ("PATCH", {"target": {"template": "coding-agent"}})
+
+
+def test_a_jobs_retries_and_alerts_are_sent_as_given_and_its_runs_say_which_try_each_is_and_whether_it_failed_for_good() -> None:
+    failing = job(retries=2, alerts="webhook", failingSince="2026-11-03T16:00:00.000Z")
+    tries = [
+        job_run(id="run_3", attempt=3, outcome="failed", exitCode=1, failedForGood=True),
+        job_run(id="run_2", attempt=2, outcome="timed_out", failedForGood=False),
+        job_run(id="run_1", attempt=1, outcome="failed", exitCode=1, failedForGood=False),
+    ]
+    agental, script = scripted(answer(201, failing), answer(200, failing), answer(200, {"runs": tries}))
+    made = agental.jobs.create(sandbox="agent-1", command="python scrape.py", every="1h", retries=2, alerts="webhook")
+    assert script.body(0) == {"target": {"sandbox": "agent-1"}, "command": "python scrape.py", "every": "1h", "retries": 2, "alerts": "webhook"}
+    assert (made.retries, made.alerts, made.failing_since) == (2, "webhook", "2026-11-03T16:00:00.000Z")
+    # retries=0 is sent, not left out as a value that was not given.
+    agental.jobs.update("scrape", retries=0, alerts="both")
+    assert (script.sent[1].method, script.sent[1].url.path, script.body(1)) == ("PATCH", "/v1/jobs/scrape", {"retries": 0, "alerts": "both"})
+    runs = agental.jobs.runs("scrape")
+    assert [(run.attempt, run.failed_for_good) for run in runs] == [(3, True), (2, False), (1, False)]
+
+
+def test_a_delete_of_a_template_that_jobs_make_their_fresh_sandboxes_from_pauses_them_only_when_asked() -> None:
+    agental, script = scripted(answer(200, template()), refusal(409, "in_use_by_jobs"), answer(204))
+    made = agental.templates.get("tpl_0000000000000002")
+    with pytest.raises(ApiError, match="in_use_by_jobs"):
+        made.delete()
+    assert "pauseJobs" not in str(script.sent[1].url)
+    made.delete(pause_jobs=True)
+    assert (script.sent[2].method, script.sent[2].url.path, script.sent[2].url.params["pauseJobs"]) == ("DELETE", "/v1/templates/tpl_0000000000000002", "true")
+
+
+def test_the_organizations_job_runs_are_read_with_their_filters_and_the_jobs_usage_by_window() -> None:
+    usage = {
+        "since": "2026-11-01T00:00:00.000Z", "until": "2026-11-16T00:00:00.000Z", "runningSeconds": 120, "listCostMicros": 400,
+        "jobs": [{"jobId": "job_1", "name": "scrape", "sandboxId": ID, "sandboxName": "agent-1", "size": "small", "runs": 2, "startedSandbox": 1, "failed": 0, "skipped": 1, "missed": 0, "runningSeconds": 120, "listCostMicros": 400}],
+    }
+    agental, script = scripted(answer(200, {"runs": [job_run(outcome="failed", exitCode=1)]}), answer(200, usage))
+    runs = agental.job_runs(limit=10, job="scrape", outcome="failed")
+    assert [(one.id, one.exit_code) for one in runs] == [("run_1", 1)]
+    assert (script.sent[0].url.path, dict(script.sent[0].url.params)) == ("/v1/job-runs", {"limit": "10", "job": "scrape", "outcome": "failed"})
+    counted = agental.jobs.usage(since="2026-11-01T00:00:00Z")
+    assert (counted.running_seconds, counted.jobs[0].skipped) == (120, 1)
+    assert (script.sent[1].url.path, dict(script.sent[1].url.params)) == ("/v1/usage/jobs", {"since": "2026-11-01T00:00:00Z"})
 
 
 def test_a_list_follows_every_page_and_a_page_is_read_alone_with_its_filter_sort_and_cursor() -> None:

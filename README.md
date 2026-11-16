@@ -82,24 +82,73 @@ now = sandbox.commands.get(started.id)
 
 For work that must outlast ten minutes, start it in the background inside the machine: `sandbox.exec("nohup npm run dev > dev.log 2>&1 < /dev/null &")`.
 
-## On a schedule
+## Jobs
+
+A job runs a command in a sandbox you keep, or in a fresh one made from a template for each run: every so often, on a cron, once, or only when asked.
 
 ```python
-tick = sandbox.schedules.create("python scrape.py", every="1h", name="scrape")
-sandbox.schedules.create("./digest.sh", cron="0 7 * * 1-5", time_zone="Europe/Sofia")
+tick = agental.jobs.create(sandbox="scraper", command="python scrape.py", every="1h", name="scrape")
+agental.jobs.create(sandbox="scraper", command="./digest.sh", cron="0 7 * * 1-5", time_zone="Europe/Sofia")
 
-sandbox.schedules.run(tick.id)  # one run now
-runs = sandbox.schedules.runs(tick.id)  # the latest first: outcome, exit_code, command_id
-sandbox.schedules.update(tick.id, enabled=False)  # paused
+run = agental.jobs.run("scrape", wait=600)  # one run now, waited for: outcome, exit_code, stdout, stderr
+runs = agental.jobs.runs("scrape")  # the latest first
+output = agental.jobs.run_output("scrape", runs[0].id)  # one run with its output
+agental.jobs.pause("scrape")  # and resume("scrape")
+agental.jobs.list(sandbox="scraper")  # one sandbox's; list() for all of them
+failed = agental.job_runs(outcome="failed", limit=20)  # every job's runs
+
+# A fresh sandbox for each run, made from a template: deleted after a run that succeeds, kept stopped for 30 minutes after one that fails.
+tests = agental.jobs.create(template="ci", size="medium", keep_failed_for="30m", command="npm test", every="1h", name="tests")
+last = agental.jobs.runs("tests")[0]
+if last.keep_until:
+    agental.jobs.keep_sandbox("tests", last.id)  # its sandbox becomes an ordinary one of yours, deleted only by you
+agental.jobs.list(template="ci")  # the jobs that make their sandboxes from one template
+
+# Try a failed run twice more, and tell a webhook rather than mail when one fails for good.
+agental.jobs.update("tests", retries=2, alerts="webhook")
+for run in agental.jobs.runs("tests"):
+    print(run.attempt, run.outcome, run.failed_for_good)  # 1, 2, 3: the tries of one due time
+
+# Inputs: the variables a run is given, as its command's environment.
+agental.jobs.create(
+    sandbox="scraper",
+    command='python report.py --day "$REPORT_DAY"',
+    name="report",
+    inputs={"REPORT_DAY": "yesterday", "API_TOKEN": {"default": "s3cret", "secret": True}},
+)
+report = agental.jobs.run("report", inputs={"REPORT_DAY": "2026-11-15"}, wait=120)
+agental.jobs.run_again("report", report.id, wait=120)  # the same inputs, secret ones too
+
+# Put a job by its name: made, or changed to exactly this, as agental job apply does.
+put = agental.jobs.put("nightly", sandbox="scraper", command="npm test", cron="0 3 * * *")
+print(put.created, put.changed, put.job.id)
+
+# An HTTP address: a POST to it starts a run, from anywhere, with no API key.
+made = agental.jobs.triggers.create("report")  # made.secret is shown this once
+httpx.post(made.trigger.url, headers={"Authorization": f"Bearer {made.secret}"}, json={"REPORT_DAY": "2026-11-15"})
+agental.jobs.triggers.create("report", signature="github")  # a GitHub webhook's: X-Hub-Signature-256
+agental.jobs.triggers.update("report", made.trigger.id, respond="wait", rate_per_minute=10)
+rotated = agental.jobs.triggers.rotate("report", made.trigger.id)  # the old secret no longer calls it
+agental.jobs.calls("report")  # the calls refused in the last 7 days, with why
+agental.jobs.triggers.delete("report", made.trigger.id)
 ```
 
-- When a run finds the sandbox stopped, it starts it, runs, and stops it again when the command ends, keeping its disk: you pay for the minutes it runs. `keep_memory=True` keeps its memory too. `if_stopped="skip"` runs only while it runs.
+- A job is named by its id or its name. `create()` and `update()` take the fields by name, or the API's JSON as `body`, with what is named going over it; in `body`, `"every": None` clears it.
+- When a run finds the sandbox stopped, it starts it, runs, and stops it again when the command ends, keeping its disk: you pay for the minutes it runs. `after="stop_with_memory"` keeps its memory too. `if_stopped="skip"` runs only while it runs.
 - A sandbox someone started again, sent a command or moved the stop of meanwhile is left running.
-- Every 5 minutes at the most: for anything more often, leave the sandbox running and loop inside it. `at` runs it once, at a date and time, as for a check you mean to come back to.
-- With `at`, `delete_after=True` deletes the sandbox once the run's command exits 0, whether the run started it or not; the run says so in `deleted_sandbox`. A run that fails, times out or does not run leaves it, so that it can be looked at. It takes a key that may delete the sandbox.
-- After 10 runs one after another fail, a schedule pauses itself and says why in `paused_reason`; resuming it clears that.
+- Every minute at the most: for anything more often, leave the sandbox running and loop inside it. `at` runs it once, at a date and time; with no `every`, `cron` or `at` it runs only when asked.
+- With `at`, `after="delete"` deletes the sandbox once the run's command exits 0, whether the run started it or not; the run says so in `deleted_sandbox`. A run that fails, times out or does not run leaves it, so that it can be looked at. It takes a key that may delete the sandbox.
+- `retries` (0 to 5, 0 unless it says) tries a run that failed or ran out of time again, after 30 seconds, then 2 minutes, 8, 32 and about 2 hours. Each try is a run of its own: `attempt` is 1 for the first, and the one with no tries left is `failed_for_good`. A run that could not get a sandbox is tried again every 30 seconds within its timeout, its tries left as they were. A pause drops a retry that waits.
+- `alerts` says who is told when a run fails for good and when the job works again: `"email"`, the default, mails its maker and the organization's owners and admins once a stretch of failures, again when it works, and when it pauses itself; `"webhook"` sends the events `job.run_failed`, with the last 4 KB of its output, and `job.recovered`; `"both"`; or `"none"`. `failing_since` says when the stretch began, `None` while it works.
+- After 10 runs one after another fail for good, a job pauses itself and says why in `paused_reason`; resuming it clears that.
 - While a run still goes, the next is skipped. `overlap="replace"` stops it instead, `"parallel"` runs both.
 - A run gets 10 minutes unless `timeout` says, in seconds, up to six hours. One that could not be made on time is `missed`, and never made up later.
+- `run(..., wait=SECONDS)` raises `AgentalTimeoutError` for a run still going after that long; the run goes on. The API holds the call until the run ends, up to 90 seconds of it, and the run is read after that.
+- `inputs` are a job's variables, by name (upper-case letters, digits and underscores): a default, `None` for one a run must be given (only on a job that runs when asked), or `{"default": ..., "secret": True}` for one sealed where it is kept and shown as `••••`, in output too. A run by the clock is given the defaults; `run(job, inputs={...})` gives values over them, and a run says what it was given in `inputs`. One the job does not name is refused with `unknown_input`, and one it needs and was not given with `input_required`. `run_again(job, run_id)` runs it again with what that run was given.
+- `put(name, ...)` makes the job of that name, or changes it to exactly what it is given, whatever is left out going back to its default, and answers a `JobPut`: the job, `created`, and `changed`, False where it was that already. `agental.jobs.usage()` counts this month's runs and their running time by job.
+- A trigger is a job's HTTP address, `url`. A caller sends its secret as `Authorization: Bearer`, or signs the body with it: `signature="github"` takes `X-Hub-Signature-256`, `"stripe"` takes `Stripe-Signature`, and `"hmac-sha256"` an HMAC-SHA256 of the body in `header` (`X-Signature` unless it says). The secret is shown once, when it is made or rotated. The fields of a JSON body that the job names in its inputs are given to the run, and the whole request is a file its command reads at `$AGENTAL_REQUEST`. A call is answered at once with the run's id (`respond="accepted"`), or held until the run ends, up to 60 seconds (`"wait"`). An `Idempotency-Key` header, or GitHub's delivery id, makes a delivery sent twice in 24 hours one run. It takes `rate_per_minute` calls a minute, 60 unless it says. A run a call starts has `started_by == "http"`. A call refused is listed by `jobs.calls(job)` for 7 days, with why.
+- On fresh sandboxes (`template=`), each run's sandbox is made running and deleted after a run that succeeds. After one that fails it is kept, stopped, until the run's `keep_until` (`keep_failed_for`, 24 hours unless it says, `"0"` to `"7d"`), so that it can be looked at, then deleted; `keep_sandbox(job, run_id)` keeps it for good. `if_stopped` and `after` are for a sandbox you keep, and are `None` on a fresh job. A run whose sandbox someone stopped or deleted while it ran is `cancelled`.
+- A template that jobs make their fresh sandboxes from is deleted only with `template.delete(pause_jobs=True)`, which pauses them; without it the delete is refused with `in_use_by_jobs`.
 
 ## Files
 

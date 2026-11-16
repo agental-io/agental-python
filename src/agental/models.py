@@ -67,6 +67,8 @@ def _shaped(hint: Any, value: Any) -> Any:
         return _shaped(inner[0], value) if len(inner) == 1 else value
     if origin is list:
         return [_shaped(typing.get_args(hint)[0], each) for each in value]
+    if origin is dict:
+        return {key: _shaped(typing.get_args(hint)[1], each) for key, each in value.items()}
     if dataclasses.is_dataclass(hint) and isinstance(hint, type):
         return build(hint, value)
     return value
@@ -525,65 +527,235 @@ class Command:
 
 
 @dataclass
-class ScheduleRun:
-    """One run of a schedule: when it was due, how it ended, and whether it started and stopped its sandbox."""
+class JobTarget:
+    """Where a job runs: a sandbox it keeps, by its id, with its name; or, with sandbox None, a template that a fresh sandbox is made from for each run."""
+
+    #: The sandbox it runs in. None for a job on fresh sandboxes.
+    sandbox: str | None
+    sandbox_name: str | None
+    #: The template each run's fresh sandbox is made from, by its id, with its name. None for a job on a sandbox it keeps.
+    template: str | None = None
+    template_name: str | None = None
+    #: The size of each fresh sandbox. None for a job on a sandbox it keeps, or for the template's size.
+    size: str | None = None
+
+
+@dataclass
+class JobMadeBy:
+    """Who made a job: kind is person or key, and name the person's name or email, or the key's name.
+
+    name is None once the person's account was erased.
+    """
+
+    kind: str
+    name: str | None
+
+
+@dataclass
+class JobInput:
+    """One of a job's inputs: a variable a run is given, as its command's environment."""
+
+    #: Its default, as a run by the clock is given it; a secret one's as ••••. None for one a run must be given.
+    default: str | None
+    #: Whether its value is sealed where it is kept, and masked as •••• in output.
+    secret: bool = False
+
+
+@dataclass
+class JobRun:
+    """One run of a job: when it was due, how it ended, and what it did to its sandbox."""
 
     id: str
-    schedule_id: str
-    sandbox_id: str
+    job_id: str
+    #: Its job's name. None for a job deleted while it ran.
+    job_name: str | None
+    #: The sandbox it ran in. None for a fresh run whose sandbox is not made yet, or could not be.
+    sandbox_id: str | None
+    #: When it came due, or was asked for.
     due_at: str
     #: When its command began. None for one that did not run.
     started_at: str | None
     finished_at: str | None
-    #: running; succeeded, failed or timed_out, as its command ended; replaced, skipped, missed, could_not_start or interrupted.
+    #: running; succeeded, failed or timed_out, as its command ended; replaced, skipped, missed, could_not_start, interrupted, or cancelled, where someone stopped or deleted its fresh sandbox while it ran.
     outcome: str
     #: Why it ended as it did, in words, where the outcome does not say.
     reason: str | None
     exit_code: int | None
-    #: Its command, whose output Sandbox.commands.get() reads.
+    #: Its command in the sandbox. Agental.jobs.run_output() gives its output.
     command_id: str | None
     #: Whether this run started its sandbox, which was stopped.
     started_sandbox: bool
     #: disk or memory: how this run stopped the sandbox it started. None when it did not stop it.
     stopped_sandbox: str | None
-    #: Whether this run deleted its sandbox after its command exited 0, as its schedule's delete_after asks. False from an API older than that.
-    deleted_sandbox: bool = False
+    #: Whether this run's sandbox was deleted by it: a fresh one after the run, or once keep_failed_for passed; a kept one after its command exited 0, as its job's after="delete" asks.
+    deleted_sandbox: bool
+    #: timer, its time came; run_now, a person in the console asked; api, an API key asked; http, a call of one of its job's addresses.
+    started_by: str
+    #: Whether it ran in a fresh sandbox, made from its job's template for this run.
+    fresh: bool = False
+    #: A failed fresh run's: until when its sandbox is kept, stopped, to be looked at, then deleted. None otherwise.
+    keep_until: str | None = None
+    #: Whether its fresh sandbox was kept for good, by Agental.jobs.keep_sandbox(): an ordinary sandbox now.
+    sandbox_kept: bool = False
+    #: Which try of its due time it is: 1, then 2 and on for its job's retries. A try again after one that could not get a sandbox keeps its number.
+    attempt: int = 1
+    #: Whether it failed with no tries left: what the job's alerts are sent for.
+    failed_for_good: bool = False
+    #: What it was given, by name, as variables of its command: a secret one as ••••.
+    inputs: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
-class Schedule:
-    """A command a sandbox runs on a schedule, with its last run."""
+class JobRunWithOutput(JobRun):
+    """A run of a job with the last 262,144 characters its command wrote to each stream.
+
+    Each is None where the run has no command, its output is no longer kept, or output_hidden
+    is true: the API key may not run commands in the run's sandbox (exec), and output is read as
+    a command's would be.
+    """
+
+    stdout: str | None = None
+    stderr: str | None = None
+    #: Whether stdout, or stderr, is the end of more than was kept.
+    stdout_cut: bool = False
+    stderr_cut: bool = False
+    output_hidden: bool = False
+
+
+@dataclass
+class Job:
+    """A command that runs in a kept sandbox, or in a fresh one made from a template for each run: on a clock, once, or only when asked, with its last run."""
 
     id: str
-    sandbox_id: str
     name: str
+    target: JobTarget
     #: What it runs, through sh -c.
     command: str
-    #: How often, as 15m, 1h or 1d, counted from when it was made. None when cron says.
+    #: How often, as 15m, 1h or 1d, counted from when it was made. None when cron or at says, or it runs only when asked.
     every: str | None
-    #: When, as a five-field cron expression in time_zone. None when every or at says.
+    #: When, as a five-field cron expression in time_zone. None when every or at says, or it runs only when asked.
     cron: str | None
-    #: The one time it runs, for a schedule that runs once. None for one that runs again and again.
+    #: The one time it runs, for a job that runs once.
     at: str | None
     time_zone: str
     #: How long a run may take, in milliseconds, as the API says it. create() and update() take it in seconds, as timeout.
     timeout_ms: int
-    #: start: a run starts a stopped sandbox, and stops it again after. skip: a run that finds it stopped is skipped.
-    if_stopped: str
-    #: Whether a run that started the sandbox stops it with its memory kept.
-    keep_memory: bool
     #: skip, replace or parallel: what a run does while the last one still goes.
     overlap: str
+    #: start: a run starts a stopped sandbox, and stops it again after. skip: a run that finds it stopped is skipped. None for a job on fresh sandboxes.
+    if_stopped: str | None
+    #: stop, stop_with_memory or delete: what a run does to its sandbox after. None for a job on fresh sandboxes.
+    after: str | None
     enabled: bool
-    #: When it next runs. None while it is paused, and for one that ran once.
-    next_run_at: str | None
-    #: Why it paused itself, after runs one after another failed. None for one paused by hand, or running.
+    #: Why it paused itself: after 10 runs one after another failed for good, or its sandbox was deleted. None for one paused by hand, or on.
     paused_reason: str | None
-    last_run: ScheduleRun | None
+    #: When it next runs. None while it is paused, for one that ran once, and for one that runs only when asked.
+    next_run_at: str | None
+    last_run: JobRun | None
+    made_by: JobMadeBy
     created_at: str
     updated_at: str
-    #: Whether its run deletes the sandbox after, where its command exits 0. Only a schedule that runs once has it. False from an API older than that.
-    delete_after: bool = False
+    #: How long a failed run's fresh sandbox is kept, stopped, as 0, 30m or 24h. None for a job on a sandbox it keeps.
+    keep_failed_for: str | None = None
+    #: How many times a run that failed or ran out of time is tried again, 0 to 5.
+    retries: int = 0
+    #: Who is told when a run fails for good and when the job works again: email, webhook, both or none.
+    alerts: str = "email"
+    #: When its failing stretch began: the due time of its first run that failed for good since it last worked. None while it works.
+    failing_since: str | None = None
+    #: The variables a run may be given, by name, each with its default.
+    inputs: dict[str, JobInput] = field(default_factory=dict)
+
+
+@dataclass
+class JobPut:
+    """What Agental.jobs.put() answers: the job as it is now, whether it was made, and whether it changed."""
+
+    job: Job
+    #: It was not there, and was made.
+    created: bool
+    #: It was made, or changed; False where it was that already.
+    changed: bool
+
+
+@dataclass
+class JobTrigger:
+    """A job's HTTP address: a POST to its url starts a run, from anywhere, with the secret it was made with."""
+
+    id: str
+    job_id: str
+    #: Its address, as https://agental.run/trg_…. None where this deployment serves no addresses.
+    url: str | None
+    #: How a caller proves it may call: bearer, the secret as Authorization: Bearer; github, X-Hub-Signature-256; stripe, Stripe-Signature; hmac-sha256, an HMAC-SHA256 of the body in header. The secret as a bearer token is always taken.
+    signature: Literal["bearer", "github", "stripe", "hmac-sha256"]
+    #: The header an hmac-sha256 signature is sent in. None for the others.
+    header: str | None
+    #: accepted: a call is answered at once, 202 with the run's id. wait: it is held until the run ends, up to 60 seconds, and answered with its outcome and output.
+    respond: Literal["accepted", "wait"]
+    #: How many calls a minute it takes.
+    rate_per_minute: int
+    created_at: str
+    #: When its secret was last rotated. None for one never rotated.
+    rotated_at: str | None
+    #: Whether the sender's own signing secret is set (Stripe makes one for each endpoint): signatures are checked with it.
+    signing_secret_set: bool | None = None
+
+
+@dataclass
+class JobTriggerWithSecret:
+    """A trigger with its secret, as Agental.jobs.triggers.create() and rotate() answer it: the secret is shown this once."""
+
+    trigger: JobTrigger
+    secret: str
+
+
+@dataclass
+class RefusedJobCall:
+    """A call of a job's address that was refused, with why: kept 7 days."""
+
+    id: str
+    trigger_id: str
+    at: str
+    #: The HTTP status it was answered with, as 401 or 429.
+    status: int
+    #: Why it was refused, in words.
+    reason: str
+    #: The address it came from, where it is known.
+    from_: str | None
+
+
+@dataclass
+class JobUsageLine:
+    """One job's runs in a window, and their running time at the list price."""
+
+    job_id: str
+    #: None for a job deleted while a run of it went on.
+    name: str | None
+    #: The sandbox it runs in. None for a job on fresh sandboxes.
+    sandbox_id: str | None
+    sandbox_name: str | None
+    size: str
+    runs: int
+    started_sandbox: int
+    failed: int
+    skipped: int
+    missed: int
+    running_seconds: int
+    list_cost_micros: int
+    #: The template its fresh sandboxes are made from. None for a job on a sandbox it keeps.
+    template_id: str | None = None
+    template_name: str | None = None
+
+
+@dataclass
+class JobUsage:
+    """The jobs' runs due in a window, by job: how many, and the running time they came to."""
+
+    since: str
+    until: str
+    running_seconds: int
+    list_cost_micros: int
+    jobs: list[JobUsageLine]
 
 
 @dataclass

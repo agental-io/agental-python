@@ -19,6 +19,7 @@ from collections.abc import Callable, Generator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote
 
 from .errors import AgentalConnectionError, AgentalError, AgentalTimeoutError, ApiError, ProxyError
 from .models import ExecEvent, TerminalExit
@@ -350,6 +351,41 @@ def wait_command(path: str, command_id: str, timeout: float, config: Settings) -
             return command
         if time.monotonic() + config.poll_interval > deadline:
             raise AgentalTimeoutError(f"Command {command_id} was still running after {timeout:g} s.")
+        yield Sleep(config.poll_interval)
+
+
+#: The most seconds the API holds a call for a job's run to end: 90, as the proxy in front of it gives up at 100.
+JOB_WAIT_HELD = 90
+
+
+def run_job(path: str, body: dict[str, Any] | None, wait: float | None, config: Settings) -> Steps:
+    """Makes a job's run at path, as run and run again do: answered as it begins, or, with wait, held by the API until it ends and then read until it has.
+
+    It answers the run, and with wait whether it came with its output: 200 is the run ended
+    within the hold. One still running when the wait is out raises AgentalTimeoutError.
+    """
+    if wait is None:
+        return (yield from one(Call("POST", path, body=body))), False
+    deadline = time.monotonic() + wait
+    held = max(0, min(JOB_WAIT_HELD, int(wait)))
+    answer: Answer = yield Call("POST", path, query={"wait": str(held)}, body=body, timeout=held + REQUEST_TIMEOUT)
+    if answer.status == 200:
+        return answer.body, True
+    started = answer.body
+    run_path = f"/v1/jobs/{quote(started['jobId'], safe='')}/runs/{quote(started['id'], safe='')}"
+    return (yield from wait_job_run(run_path, wait, config, deadline)), True
+
+
+def wait_job_run(path: str, timeout: float, config: Settings, deadline: float | None = None) -> Steps:
+    """Reads a job's run, with its output, until it has ended: within timeout seconds, or by deadline where one is given."""
+    if deadline is None:
+        deadline = time.monotonic() + timeout
+    while True:
+        run = yield from one(Call("GET", path, replay=True))
+        if run["outcome"] != "running":
+            return run
+        if time.monotonic() + config.poll_interval > deadline:
+            raise AgentalTimeoutError(f"Run {run['id']} was still running after {timeout:g} s.")
         yield Sleep(config.poll_interval)
 
 
