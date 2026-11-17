@@ -1909,6 +1909,7 @@ class AsyncJobs:
         after: str | None = None,
         retries: int | None = None,
         alerts: str | None = None,
+        max_monthly_spend_micros: int | None = None,
         enabled: bool | None = None,
         inputs: Mapping[str, str | None | Mapping[str, Any]] | None = None,
         events: Sequence[Mapping[str, Any]] | None = None,
@@ -1935,6 +1936,12 @@ class AsyncJobs:
         the organization's owners and admins; "webhook", the events job.run_failed and
         job.recovered; "both"; or "none".
 
+        max_monthly_spend_micros (from 10000, $0.01) is the most its runs may cost in a calendar
+        month (UTC), at the list price of the running time they cause: reached, the job pauses
+        itself, says why in paused_reason, and mails as alerts says; spent_this_month_micros is
+        what they cost so far. Left out: no limit. update(body={"maxMonthlySpendMicros": None})
+        takes it away.
+
         inputs are the variables a run is given, as its command's environment, by name (upper-case
         letters, digits and underscores): a default, None for one a run must be given (only on a job
         that runs when asked), or {"default": ..., "secret": True} for one sealed where it is kept
@@ -1950,7 +1957,7 @@ class AsyncJobs:
 
         body is the API's JSON, as POST /v1/jobs takes it; what is given by name goes over it.
         """
-        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs), events=_events(events))
+        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, max_monthly_spend_micros=max_monthly_spend_micros, enabled=enabled, inputs=_inputs(inputs), events=_events(events))
         return build(Job, await self._http.run(_core.one(Call("POST", "/v1/jobs", body={**(body or {}), **given}))))
 
     async def get(self, id_or_name: str) -> Job:
@@ -1978,6 +1985,7 @@ class AsyncJobs:
         after: str | None = None,
         retries: int | None = None,
         alerts: str | None = None,
+        max_monthly_spend_micros: int | None = None,
         enabled: bool | None = None,
         inputs: Mapping[str, str | None | Mapping[str, Any]] | None = None,
         events: Sequence[Mapping[str, Any]] | None = None,
@@ -1985,13 +1993,13 @@ class AsyncJobs:
         """Changes a job. What is left out is as it was; enabled=False pauses it, and drops a retry that waits.
 
         sandbox, or template and size, moves it to another sandbox, or to fresh sandboxes from
-        another template; keep_failed_for is a fresh job's only. retries, alerts, inputs and events are as
+        another template; keep_failed_for is a fresh job's only. retries, alerts, max_monthly_spend_micros, inputs and events are as
         create() takes them; inputs or events given replace the ones the job had, and events=[] takes them all away.
 
         body is the API's JSON, as PATCH /v1/jobs/{id} takes it, where a null clears every, cron or at;
         what is given by name goes over it.
         """
-        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs), events=_events(events))
+        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, name=name, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, max_monthly_spend_micros=max_monthly_spend_micros, enabled=enabled, inputs=_inputs(inputs), events=_events(events))
         return build(Job, await self._http.run(_core.one(Call("PATCH", self._path(id_or_name), body={**(body or {}), **given}, replay=True))))
 
     async def pause(self, id_or_name: str) -> Job:
@@ -2026,6 +2034,7 @@ class AsyncJobs:
         after: str | None = None,
         retries: int | None = None,
         alerts: str | None = None,
+        max_monthly_spend_micros: int | None = None,
         enabled: bool | None = None,
         inputs: Mapping[str, str | None | Mapping[str, Any]] | None = None,
         events: Sequence[Mapping[str, Any]] | None = None,
@@ -2038,7 +2047,7 @@ class AsyncJobs:
 
         body is the API's JSON, as PUT /v1/jobs/{name} takes it; what is given by name goes over it.
         """
-        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, enabled=enabled, inputs=_inputs(inputs), events=_events(events))
+        given = _job_body(target=_job_target(sandbox, template, size), keep_failed_for=keep_failed_for, command=command, every=every, cron=cron, at=at, time_zone=time_zone, timeout_ms=_ms(timeout), overlap=overlap, if_stopped=if_stopped, after=after, retries=retries, alerts=alerts, max_monthly_spend_micros=max_monthly_spend_micros, enabled=enabled, inputs=_inputs(inputs), events=_events(events))
         answer = await self._http.run(_core.answered(Call("PUT", self._path(name), body={**(body or {}), **given}, replay=True)))
         created = answer.status == 201
         return JobPut(job=build(Job, answer.body), created=created, changed=created or answer.headers.get("agental-changed") != "false")
@@ -2197,7 +2206,7 @@ def _events(events: Sequence[Mapping[str, Any]] | None) -> list[dict[str, Any]] 
 
 def _job_body(**fields: Any) -> dict[str, Any]:
     """A job's fields as the API takes them: in its names, with what was not given left out."""
-    names = {"time_zone": "timeZone", "timeout_ms": "timeoutMs", "if_stopped": "ifStopped", "keep_failed_for": "keepFailedFor"}
+    names = {"time_zone": "timeZone", "timeout_ms": "timeoutMs", "if_stopped": "ifStopped", "keep_failed_for": "keepFailedFor", "max_monthly_spend_micros": "maxMonthlySpendMicros"}
     return {names.get(key, key): value for key, value in fields.items() if value is not None}
 
 

@@ -2494,6 +2494,18 @@ def test_a_jobs_retries_and_alerts_are_sent_as_given_and_its_runs_say_which_try_
     assert [(run.attempt, run.failed_for_good) for run in runs] == [(3, True), (2, False), (1, False)]
 
 
+def test_a_jobs_monthly_spending_limit_is_sent_as_given_and_read_back_with_what_the_month_cost() -> None:
+    limited = job(maxMonthlySpendMicros=25_000_000, spentThisMonthMicros=1_200_000)
+    agental, script = scripted(answer(201, limited), answer(200, job()))
+    made = agental.jobs.create(sandbox="agent-1", command="python scrape.py", every="1h", max_monthly_spend_micros=25_000_000)
+    assert script.body(0) == {"target": {"sandbox": "agent-1"}, "command": "python scrape.py", "every": "1h", "maxMonthlySpendMicros": 25_000_000}
+    assert (made.max_monthly_spend_micros, made.spent_this_month_micros) == (25_000_000, 1_200_000)
+    # A null in body takes the limit away.
+    cleared = agental.jobs.update("scrape", {"maxMonthlySpendMicros": None})
+    assert script.body(1) == {"maxMonthlySpendMicros": None}
+    assert cleared.max_monthly_spend_micros is None
+
+
 def test_a_delete_of_a_template_that_jobs_make_their_fresh_sandboxes_from_pauses_them_only_when_asked() -> None:
     agental, script = scripted(answer(200, template()), refusal(409, "in_use_by_jobs"), answer(204))
     made = agental.templates.get("tpl_0000000000000002")

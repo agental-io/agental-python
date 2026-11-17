@@ -701,6 +701,10 @@ class Job:
     inputs: dict[str, JobInput] = field(default_factory=dict)
     #: The events that start it: another job's run ending, or mail arriving at a sandbox.
     events: list[JobEvent] = field(default_factory=list)
+    #: The most its runs may cost in a calendar month (UTC), in micro-dollars: reached, it pauses itself. None: no limit.
+    max_monthly_spend_micros: int | None = None
+    #: What its runs cost this calendar month so far, in micro-dollars. None where it has no limit.
+    spent_this_month_micros: int | None = None
 
 
 @dataclass
