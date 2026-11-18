@@ -1095,6 +1095,18 @@ class FileWritten:
 
 
 @dataclass
+class FileLink:
+    """An address that writes (PUT) or reads (GET) one file with no key, until expires_at. Keep it secret."""
+
+    url: str
+    method: str
+    path: str
+    expires_at: str
+    #: The largest file it takes or gives.
+    most_bytes: int
+
+
+@dataclass
 class FileMoved:
     from_: str
     to: str

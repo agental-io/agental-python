@@ -2695,3 +2695,16 @@ def test_a_job_is_made_with_events_that_start_it_and_a_run_says_which_event_star
     assert run.trigger == JobRunTrigger(on="email.received", sandbox="sbx_inbox", sandbox_name="inbox", email="msg_1")
     agental.jobs.update("deploy", events=[])
     assert script.body(2) == {"events": []}
+
+
+def test_an_upload_or_download_link_is_asked_for_by_path_with_its_time_when_given() -> None:
+    link = {"url": "https://api.example/v1/file-links/afl_x", "method": "PUT", "path": "/opt/agental/a.tgz", "expiresAt": "2026-11-18T12:15:00.000Z", "mostBytes": 10_000_000}
+    agental, script = scripted(answer(200, sandbox()), answer(200, link), answer(200, {**link, "method": "GET"}))
+    box = agental.sandboxes.get(ID)
+    made = box.files.upload_link("a.tgz")
+    assert (made.url, made.expires_at, made.most_bytes) == (link["url"], link["expiresAt"], 10_000_000)
+    assert (script.sent[1].method, script.sent[1].url.path) == ("POST", f"/v1/sandboxes/{ID}/files/upload-link")
+    assert script.body(1) == {"path": "a.tgz"}
+    assert box.files.download_link("a.tgz", expires_in_seconds=120).method == "GET"
+    assert script.sent[2].url.path == f"/v1/sandboxes/{ID}/files/download-link"
+    assert script.body(2) == {"path": "a.tgz", "expiresInSeconds": 120}

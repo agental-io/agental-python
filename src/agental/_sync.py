@@ -55,6 +55,7 @@ from .models import (
     ExecResult,
     FileContents,
     FileMoved,
+    FileLink,
     FileWritten,
     Folder,
     Headroom,
@@ -369,6 +370,24 @@ class Files:
             body["ifModifiedAt"] = if_modified_at
         # Sent again after a lost answer, a write made on a time would be refused by its own change.
         return build(FileWritten, self._http.run(_core.one(Call("PUT", self._path, body=body, replay=if_modified_at is None))))
+
+    def upload_link(self, path: str, *, expires_in_seconds: int | None = None) -> FileLink:
+        """An address that writes one file, path, with no key: a PUT of its bytes, such as ``curl -T build.tgz "$URL"``, up to 10 MB.
+
+        It works for 15 minutes unless expires_in_seconds says (up to an hour), and ends when the
+        sandbox stops. For a computer or a program that holds no API key. Keep it secret.
+        """
+        body: dict[str, object] = {"path": path}
+        if expires_in_seconds is not None:
+            body["expiresInSeconds"] = expires_in_seconds
+        return build(FileLink, self._http.run(_core.one(Call("POST", f"{self._path}/upload-link", body=body))))
+
+    def download_link(self, path: str, *, expires_in_seconds: int | None = None) -> FileLink:
+        """An address that reads one file, path, with no key: a GET answers its bytes. As upload_link, otherwise."""
+        body: dict[str, object] = {"path": path}
+        if expires_in_seconds is not None:
+            body["expiresInSeconds"] = expires_in_seconds
+        return build(FileLink, self._http.run(_core.one(Call("POST", f"{self._path}/download-link", body=body))))
 
     def list(self, path: str) -> Folder:
         """What a folder holds, by name: its first 10,000 entries, and truncated if there are more."""
