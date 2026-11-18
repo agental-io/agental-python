@@ -1249,11 +1249,26 @@ class MailUsage:
 
 @dataclass
 class StoppedUsage:
-    """Stopped time in a window, with the disk kept, and what it comes to at the stopped price: 5% of the running one."""
+    """Stopped time in a window, and what it comes to at the stopped price: nothing in the first 14 days after each stop, then $0.05 a GB a month of what it stores."""
 
     seconds: int
     #: Not a charge here: Billing says what is.
     list_cost_micros: int
+
+
+@dataclass
+class SandboxStorage:
+    """A stopped sandbox's storage now: what it stores, when its free days end, and what it costs an hour."""
+
+    #: In bytes: its pack's size once archived, else what its server said at its stop, else its whole disk.
+    stored_bytes: int
+    #: When the free days of its stretch end, 14 days after its stop.
+    free_until: str | None
+    #: What it costs an hour now, in millionths of a US dollar: 0 in its free days.
+    micros_per_hour: int
+    #: What a stopped sandbox costs past its free days, for each GB it stores, a month: 50,000 is $0.05.
+    micros_per_gb_month: int
+    free_days: int
 
 
 @dataclass
@@ -1284,6 +1299,8 @@ class SandboxUsage:
     billing: str
     #: Stopped time, apart from the running time above. None from an API older than it.
     stopped: StoppedUsage | None = None
+    #: While it is stopped: what it stores and its price now. None while it runs, and from an API older than it.
+    storage: SandboxStorage | None = None
 
 
 @dataclass
@@ -2076,10 +2093,15 @@ class SizePrice:
     list_price_micros_per_hour: int
     currency: str
     label: str
-    #: What an hour of it stopped costs, with its disk kept: 5% of the list price. None from an API older than it.
+    #: The most an hour of it stopped costs once its free days are over: its whole disk stored, at
+    #: stopped_micros_per_gb_month. Most store much less. None from an API older than it.
     stopped_micros_per_hour: int | None = None
-    #: What an hour of it stopped with its memory kept costs, its disk kept too: 10% of the list price. None from an API older than it.
+    #: The same with its whole memory kept too. None from an API older than it.
     stopped_with_memory_micros_per_hour: int | None = None
+    #: What a stopped sandbox costs past its free days, for each GB it stores, a month: 50,000 is $0.05. None from an API older than it.
+    stopped_micros_per_gb_month: int | None = None
+    #: The days after each stop a stopped sandbox is free, whatever it stores. None from an API older than it.
+    stopped_free_days: int | None = None
 
 
 @dataclass
@@ -2167,8 +2189,8 @@ class FreePlan:
 
     #: The free plan's id among the tiers: "free".
     plan_id: str
-    #: What each month's use is free up to, in millionths of a US dollar: 4,950,000 is 183 small hours,
-    #: 366 tiny hours or 11,000 CI minutes on small. It does not carry over.
+    #: What each month's use is free up to, in millionths of a US dollar: 5,000,000 is 185 small hours,
+    #: 370 tiny hours or 11,100 CI minutes on small. It does not carry over.
     allowance_micros: int
     #: Small sandboxes it runs and starts at once, at most, until the account has paid for something, a top-up
     #: of any size; then the plan's running_units. A tiny counts half.
@@ -2177,16 +2199,22 @@ class FreePlan:
 
 @dataclass
 class StoragePrices:
-    """What a stopped sandbox's disk and snapshots past the free ones cost, by the second."""
+    """What a stopped sandbox and snapshots past the free ones cost, by the second."""
 
-    #: A stopped sandbox's share of its running price. Each size's is in SizePrice.stopped_micros_per_hour.
+    #: Retired, 0: a stopped sandbox is free for stopped_free_days, then priced by what it stores at stopped_micros_per_gb_month.
     stopped_percent: float
     #: How many of an account's oldest snapshots cost nothing.
     free_snapshots: int
     #: What each snapshot past them costs an hour: $1.70 over a month.
     snapshot_micros_per_hour: int
-    #: A share of its running price for a sandbox stopped with its memory kept. None from an API older than it.
+    #: Retired, 0, as stopped_percent. None from an API older than it.
     stopped_with_memory_percent: float | None = None
+    #: What a stopped sandbox costs past its free days, for each GB (10^9 bytes) it stores, a month: 50,000 is $0.05. None from an API older than it.
+    stopped_micros_per_gb_month: int | None = None
+    #: The days after each stop a stopped sandbox is free, whatever it stores. None from an API older than it.
+    stopped_free_days: int | None = None
+    #: What an account that has not paid yet stores at most in stopped sandboxes, in bytes: 20 GB. None from an API older than it.
+    never_paid_max_stored_bytes: int | None = None
 
 
 @dataclass
@@ -2295,6 +2323,24 @@ class Billing:
     auto_reload: AutoReloadSetting | None = None
     #: Whether an auto-reload can be set: Stripe sells here, and the account has saved a card there.
     can_auto_reload: bool = False
+    #: The account's stopped sandboxes: their price, what they store, and the limits until its first top-up. None from an API older than it.
+    stopped_storage: StoppedStorage | None = None
+
+
+@dataclass
+class StoppedStorage:
+    """An account's stopped sandboxes: free for free_days after each stop, then micros_per_gb_month for what each stores."""
+
+    micros_per_gb_month: int
+    free_days: int
+    #: What they store now, in bytes, deleted ones kept for their snapshots included.
+    stored_bytes: int
+    #: The part of stored_bytes still in its free days.
+    free_stored_bytes: int
+    #: What the account may store at most: 20 GB until its first top-up, else None, no limit.
+    max_stored_bytes: int | None
+    #: Whether a stop may keep a sandbox's memory: not until the account's first top-up.
+    keeps_memory: bool
 
 
 @dataclass

@@ -1306,9 +1306,9 @@ class Sandbox:
 
     def stop(self, *, keep_memory: bool = False, timeout: float = _core.RESTORE_TIMEOUT) -> Sandbox:
         """
-        Stops it. The disk is kept, with everything on it, at 5% of the running price where
-        that is charged. What was running is not, unless keep_memory: then its memory is kept
-        too, at 10% of the running price, and start() puts back every process as it was. That
+        Stops it. The disk is kept, with everything on it, free for 14 days, then $0.05 a GB a
+        month of what it stores, where that is charged. What was running is not, unless
+        keep_memory: then its memory is kept too, and start() puts back every process as it was. That
         returns once the memory is written, about a second for every 2 to 3 GiB the sandbox has:
         past a minute the API says the stop goes on, and it is read until it has stopped, for
         timeout seconds at most. info.memory_kept says whether it was, and after start(),
