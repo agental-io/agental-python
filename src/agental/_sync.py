@@ -1106,7 +1106,13 @@ class Sandbox:
         return self
 
     def update(
-        self, *, name: str = _UNSET, ttl_seconds: int | None = _UNSET, tags: list[str] = _UNSET, metadata: dict[str, str | None] = _UNSET
+        self,
+        *,
+        name: str = _UNSET,
+        ttl_seconds: int | None = _UNSET,
+        on_timeout: Literal["delete", "stop"] = _UNSET,
+        tags: list[str] = _UNSET,
+        metadata: dict[str, str | None] = _UNSET,
     ) -> Sandbox:
         """Changes its name, or how many seconds it runs after each start before it is stopped. ttl_seconds=None is the deployment's default.
 
@@ -1116,7 +1122,9 @@ class Sandbox:
         are changed on the template.
         """
         changes = {
-            key: value for key, value in (("name", name), ("ttlSeconds", ttl_seconds), ("tags", tags), ("metadata", metadata)) if value is not _UNSET
+            key: value
+            for key, value in (("name", name), ("ttlSeconds", ttl_seconds), ("onTimeout", on_timeout), ("tags", tags), ("metadata", metadata))
+            if value is not _UNSET
         }
         self._read(self._http.run(_core.one(Call("PATCH", self._path, body=changes, replay=True))))
         return self
@@ -1482,6 +1490,7 @@ class Sandboxes:
         region: str | Sequence[str] | None = None,
         snapshot_id: str | None = None,
         ttl_seconds: int | None = _UNSET,
+        on_timeout: Literal["delete", "stop"] | None = None,
         allow: list[str] | None = None,
         egress: Egress | None = None,
         ssh_keys: list[str] | None = None,
@@ -1500,7 +1509,9 @@ class Sandboxes:
         out; snapshot_id makes it from one of your snapshots. ttl_seconds is how many seconds
         it runs after each start before it is stopped, 60 at the least: left out, what the
         template's start says, and where that says none, the deployment's default; None is
-        the deployment's default whatever the template says. Over max_ttl_seconds of policy()
+        the deployment's default whatever the template says. on_timeout is what that time
+        limit does when it runs out: "delete" (the default) deletes the sandbox with its disk,
+        "stop" stops it and keeps its disk. Over max_ttl_seconds of policy()
         it is refused with ttl_too_long. allow is the addresses it may reach on top of its
         template's outbound rule, from its first boot: the rule itself is the template's, set
         with Template.set_network(). Left out, it has none of its own. egress is where its
@@ -1541,6 +1552,8 @@ class Sandboxes:
             body["snapshotId"] = snapshot_id
         if ttl_seconds is not _UNSET:
             body["ttlSeconds"] = ttl_seconds
+        if on_timeout is not None:
+            body["onTimeout"] = on_timeout
         if allow is not None:
             body["network"] = {"allow": list(allow)}
         if egress is not None:
@@ -2466,7 +2479,7 @@ class Agental:
 
         Give one of plan; top_up, any whole number of US dollars from 15 to 100,000 of credits
         that does not expire; or card=True, which saves a card for the free plan and charges
-        nothing. Once the card is saved, the account is given the free plan's credit, once, and
+        nothing. Once the card is saved, the account has the free plan's monthly allowance, once a card, and
         may run sandboxes; an account with a card saved already raises ApiError 409 card_saved.
         From $200 a top-up adds a bonus, 2% there and growing to 25% at $10,000: $500 adds
         $537. prices() says what each adds. An account that already has a plan and asks for

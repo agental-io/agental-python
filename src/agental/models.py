@@ -259,6 +259,8 @@ class SandboxInfo:
     stopped_at: str | None
     #: Seconds it runs after a start before it is stopped. None is the deployment's default.
     ttl_seconds: int | None
+    #: What its time limit does when it runs out: "delete" (with its disk), or "stop" and keep its disk.
+    on_timeout: Literal["delete", "stop"]
     #: When it is to be stopped: the time set_auto_stop() moved the stop of this run to, or else its last start and ttl_seconds. None when it is not running.
     auto_stop_at: str | None
     subdomain: str | None
@@ -2157,16 +2159,17 @@ class TopUpBonus:
 
 @dataclass
 class FreePlan:
-    """The free plan: nothing a month, and what it runs is paid from credits.
+    """The free plan: nothing a month, each month's use free up to allowance_micros, the rest paid from credits.
 
-    It needs a card saved, charged nothing: checkout(card=True). Once it is, the account is given
-    credit_micros, once an account and once a card, which does not expire.
+    It needs a card saved, charged nothing: checkout(card=True). Once it is, each calendar month's
+    first allowance_micros of use (UTC, at list price) is free, once an account and once a card.
     """
 
     #: The free plan's id among the tiers: "free".
     plan_id: str
-    #: The credit given once for a card saved, in millionths of a US dollar.
-    credit_micros: int
+    #: What each month's use is free up to, in millionths of a US dollar: 4,950,000 is 183 small hours,
+    #: 366 tiny hours or 11,000 CI minutes on small. It does not carry over.
+    allowance_micros: int
     #: Small sandboxes it runs and starts at once, at most, until the account has paid for something, a top-up
     #: of any size; then the plan's running_units. A tiny counts half.
     unpaid_units: int
@@ -2222,11 +2225,15 @@ class BillingPeriod:
 class BillingFree:
     """Where an account on the free plan stands."""
 
-    #: Whether it has a card saved, which it must before it runs anything, and so has had its credit.
+    #: Whether it has a card saved, which it must before it runs anything.
     card_saved: bool
     #: Whether it has paid for anything. Until it has, it runs and starts at most unpaid_units small sandboxes at once.
     paid: bool
     unpaid_units: int
+    #: What this month's use is free up to: the allowance, or 0 where its card had it on another account.
+    allowance_micros: int = 0
+    #: How much of the allowance this month's use has taken.
+    allowance_used_micros: int = 0
 
 
 @dataclass

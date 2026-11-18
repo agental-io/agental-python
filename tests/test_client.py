@@ -1259,7 +1259,7 @@ def test_billing_is_read_and_a_top_up_or_a_plan_is_bought_by_the_checkout_call_w
         "topUpRange": {"minDollars": 15, "maxDollars": 100_000},
         "topUpBonus": {"fromDollars": 200, "fromPercent": 2, "toDollars": 10_000, "toPercent": 25},
         "volumeDiscount": [{"fromMicros": 0, "percent": 0}, {"fromMicros": 1_000_000_000, "percent": 1.5}],
-        "free": {"planId": "free", "creditMicros": 10_000_000, "unpaidUnits": 2},
+        "free": {"planId": "free", "allowanceMicros": 4_950_000, "unpaidUnits": 2},
     }
     agental, script = scripted(
         answer(200, prices),
@@ -1275,7 +1275,7 @@ def test_billing_is_read_and_a_top_up_or_a_plan_is_bought_by_the_checkout_call_w
     assert (listed.top_ups[0].bonus_micros, listed.top_ups[1].micros, listed.top_ups[1].bonus_micros, listed.top_ups[1].bonus_percent) == (None, 537_000_000, 37_000_000, 7.4)
     assert listed.top_up_range is not None and (listed.top_up_range.min_dollars, listed.top_up_range.max_dollars) == (15, 100_000)
     assert listed.top_up_bonus is not None and (listed.top_up_bonus.from_dollars, listed.top_up_bonus.to_percent) == (200, 25)
-    assert (listed.plans[0].list_price_micros_per_hour, listed.free.plan_id, listed.free.credit_micros, listed.free.unpaid_units) == (18000, "free", 10_000_000, 2)
+    assert (listed.plans[0].list_price_micros_per_hour, listed.free.plan_id, listed.free.allowance_micros, listed.free.unpaid_units) == (18000, "free", 4_950_000, 2)
     assert (listed.tiers[0].id, listed.tiers[0].dollars_per_month, listed.tiers[0].sizes) == ("free", 0, ["tiny", "small"])
     assert not hasattr(listed.tiers[1], "burst") and not hasattr(listed.tiers[1], "sandboxes_at_once")
     assert (script.sent[0].method, script.sent[0].url.path) == ("GET", "/v1/billing/plans")

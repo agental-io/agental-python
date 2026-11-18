@@ -450,7 +450,7 @@ A sandbox has no point for a moment it was stopped at, and its `reading` is then
 billing = agental.billing()
 print(billing.used_micros, billing.top_up_micros)
 
-# What is sold: the plans in tiers, the free one first, the hourly price of each size in plans, top-ups and their bonus, and the free plan's credit.
+# What is sold: the plans in tiers, the free one first, the hourly price of each size in plans, top-ups and their bonus, and the free plan's monthly allowance.
 prices = agental.prices()
 for plan in prices.tiers:
     print(plan.id, plan.dollars_per_month, plan.sizes)
