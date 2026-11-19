@@ -2817,8 +2817,19 @@ class Agental:
         """One webhook, with every try of the last 30 days: the status each was answered, the event it was a try of, and which try."""
         return build(Webhook, self._http.run(_core.one(Call("GET", f"/v1/webhooks/{quote(webhook_id, safe='')}", replay=True))))
 
-    def update_webhook(self, webhook_id: str, *, url: str | None = None, events: Sequence[str] | None = None, description: str | None = None) -> Webhook:
-        """Changes a webhook's url, events or description, and keeps what is left out. A changed url is used from the next try on."""
+    def update_webhook(
+        self,
+        webhook_id: str,
+        *,
+        url: str | None = None,
+        events: Sequence[str] | None = None,
+        description: str | None = None,
+        enabled: bool | None = None,
+    ) -> Webhook:
+        """Changes a webhook's url, events or description, and keeps what is left out. A changed url is used from the next try on.
+
+        enabled turns it off (False) or on again (True), as disable_webhook and enable_webhook do.
+        """
         body: dict[str, Any] = {}
         if url is not None:
             body["url"] = url
@@ -2826,7 +2837,21 @@ class Agental:
             body["events"] = list(events)
         if description is not None:
             body["description"] = description
+        if enabled is not None:
+            body["enabled"] = enabled
         return build(Webhook, self._http.run(_core.one(Call("PATCH", f"/v1/webhooks/{quote(webhook_id, safe='')}", body=body, replay=True))))
+
+    def disable_webhook(self, webhook_id: str) -> Webhook:
+        """Turns a webhook off: it is posted nothing, and the events still owed to it are given up.
+
+        A webhook also turns itself off when an event fails its last try and none of its tries
+        has been taken for 3 days; its disabled_at and disabled_reason say when and why.
+        """
+        return self.update_webhook(webhook_id, enabled=False)
+
+    def enable_webhook(self, webhook_id: str) -> Webhook:
+        """Turns a webhook on again. It is posted the events made from now on; none given up while it was off is sent."""
+        return self.update_webhook(webhook_id, enabled=True)
 
     def rotate_webhook_secret(self, webhook_id: str) -> Webhook:
         """Gives a webhook a new signing secret, in signing_secret, once. The old one stops working at once."""

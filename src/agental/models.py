@@ -2004,6 +2004,13 @@ class Webhook:
     created_at: str
     updated_at: str
     deliveries: list[WebhookDelivery]
+    #: Whether events are posted to it. It turns itself off when an event fails its last try
+    #: and none of its tries has been taken for 3 days; enable_webhook turns it on again.
+    enabled: bool
+    #: When it was turned off, by hand or by itself; None while it is on.
+    disabled_at: str | None
+    #: Why it is off, in words, as "Every try failed for 3 days."; None while it is on.
+    disabled_reason: str | None
     #: Given when it is made or given a new one, and never again.
     signing_secret: str | None = None
 
