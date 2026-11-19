@@ -900,6 +900,23 @@ def headroom(**changes: Any) -> dict[str, Any]:
     }
 
 
+def test_last_month_is_read_priced_on_every_plan_with_no_amount_where_a_plan_would_have_refused_it() -> None:
+    month = {
+        "period": {"start": "2026-10-01T00:00:00.000Z", "end": "2026-11-01T00:00:00.000Z"},
+        "yours": "plan100",
+        "plans": [
+            {"planId": "free", "outcome": "not_allowed", "why": "running_count", "burstFeesMicros": None, "billMicros": None},
+            {"planId": "plan100", "outcome": "worked", "why": None, "burstFeesMicros": 640_000_000, "billMicros": 820_000_000},
+        ],
+    }
+    agental, script = scripted(answer(200, month), answer(200, {"period": None, "yours": None, "plans": []}))
+    read = agental.replay_last_month()
+    assert read.period is not None
+    assert (read.period.start, read.yours, read.plans[0].why, read.plans[1].bill_micros) == ("2026-10-01T00:00:00.000Z", "plan100", "running_count", 820_000_000)
+    assert (script.sent[0].method, script.sent[0].url.path) == ("GET", "/v1/burst/replay")
+    assert agental.replay_last_month().period is None
+
+
 def test_the_headroom_is_read_over_today_or_a_range_and_its_budget_is_set_and_cleared() -> None:
     agental, script = scripted(
         answer(200, headroom()),

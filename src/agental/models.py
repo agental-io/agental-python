@@ -1740,6 +1740,44 @@ class Headroom:
 
 
 @dataclass
+class PlanReplayPeriod:
+    """The month replayed: [start, end)."""
+
+    start: str
+    end: str
+
+
+@dataclass
+class PlanReplayPlan:
+    """One plan's outcome for the month.
+
+    worked: priced, with its burst fees and bill (its price and what the month used past its
+    included credits, before tax). not_allowed: it would have refused the month (why: size,
+    running_count, members, budget). unknown: creates or starts were refused in the month (why:
+    refused), so what they would have used is not known. Amounts are millionths of a US dollar.
+    """
+
+    plan_id: str
+    outcome: str
+    why: str | None
+    burst_fees_micros: int | None
+    bill_micros: int | None
+
+
+@dataclass
+class PlanReplay:
+    """The account's last full month priced on every plan; yours is the month as charged.
+
+    period is None where that month is not known whole: the account is younger than it, or its
+    current month did not begin as months do.
+    """
+
+    period: PlanReplayPeriod | None
+    yours: str | None
+    plans: list[PlanReplayPlan]
+
+
+@dataclass
 class SendEmailAttachment:
     filename: str
     #: The file's bytes in base64.

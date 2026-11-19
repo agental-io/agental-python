@@ -509,6 +509,18 @@ print([point.peak_running_mb / 4096 for point in week.series])
 agental.set_headroom_budget(10_000_000)
 ```
 
+`replay_last_month()` prices the account's last full month on every plan: the same use at list price, each plan's burst fees worked out again against its free burst, and its price and included credits. Its own plan is the month as charged. A plan that would have refused the month has no amount, and neither has any plan in a month whose creates or starts were refused.
+
+```python
+month = agental.replay_last_month()
+yours = next((plan for plan in month.plans if plan.plan_id == month.yours), None)
+for plan in month.plans:
+    if plan.bill_micros is not None and yours and yours.bill_micros is not None:
+        print(plan.plan_id, (plan.bill_micros - yours.bill_micros) / 1_000_000)  # dollars more (or less) than yours
+    else:
+        print(plan.plan_id, plan.why)  # size, running_count, members, budget or refused
+```
+
 A create, fork or start takes `max_burst_fee_micros`, the most it may pay, and the sandbox's `burst_fee_micros` says what it paid:
 
 ```python

@@ -60,6 +60,7 @@ from .models import (
     Folder,
     Headroom,
     HeadroomNow,
+    PlanReplay,
     HeadroomStep,
     HiddenVariable,
     HostRoute,
@@ -2599,6 +2600,18 @@ class Agental:
         """
         query = {"from": _core.iso(from_), "to": _core.iso(to), "step": step}
         return build(Headroom, self._http.run(_core.one(Call("GET", "/v1/headroom", query=query, replay=True))))
+
+    def replay_last_month(self) -> PlanReplay:
+        """The account's last full month priced on every plan.
+
+        The same use at list price, each plan's burst fees worked out again against its free
+        burst, and its price and included credits (Free: the account's allowance). Its own plan
+        (yours) is the month as charged. A plan that would have refused the month (outcome
+        not_allowed), or any plan in a month whose creates or starts were refused (unknown), has
+        no amount. period is None where that month is not known whole. Amounts are millionths of
+        a US dollar, before tax.
+        """
+        return build(PlanReplay, self._http.run(_core.one(Call("GET", "/v1/burst/replay", replay=True))))
 
     def set_headroom_budget(self, budget_micros: int | None) -> HeadroomNow:
         """Sets the most the account spends on burst fees in a month, in millionths of a US dollar.
