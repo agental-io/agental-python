@@ -22,7 +22,7 @@ from websockets.typing import Subprotocol
 from . import _core, _ws
 from ._core import Answer, Call, Sleep, Steps
 from ._version import __version__
-from .errors import AgentalConnectionError, AgentalError
+from .errors import AgentalConnectionError, AgentalError, ApiError
 from .models import (
     AccountEmail,
     ApiKey,
@@ -1479,6 +1479,26 @@ class AsyncSandbox:
     async def routes(self) -> list[HostRoute]:
         body = await self._http.run(_core.one(Call("GET", f"{self._path}/host", replay=True)))
         return [build(HostRoute, each) for each in body["routes"]]
+
+    # A site is what the console, the CLI and the MCP tools call a port with a public address: a route with public true that is not hidden.
+
+    async def sites(self) -> list[HostRoute]:
+        """Its sites: its ports with a public url, oldest first, without those reached only through the API or taken away."""
+        return [route for route in await self.routes() if route.public and not route.hidden]
+
+    async def add_site(self, port: int, *, title: str | None = None) -> HostRoute:
+        """Gives a port a public url that anyone can open while the sandbox runs. What listens must listen on 0.0.0.0."""
+        return await self.expose(port, title=title, public=True)
+
+    async def remove_site(self, site_id: str) -> HostRoute:
+        """Takes a site away for good: its url stops working now, and adding the port again gives a new one.
+
+        Only one of this sandbox's sites: any other id, of another sandbox or of a port reached only through the API,
+        is refused as not_found before anything is taken away.
+        """
+        if not any(site.id == site_id for site in await self.sites()):
+            raise ApiError(404, "not_found", f"{site_id} is not a site of this sandbox.")
+        return build(HostRoute, await self._http.run(_core.one(Call("POST", f"/v1/host-routes/{quote(site_id, safe='')}/hide", replay=True))))
 
     async def usage(self, *, since: str | datetime | None = None, until: str | datetime | None = None) -> SandboxUsage:
         """How long it has run and what that comes to at the list price, and the mail it has had. Without since, its whole life."""

@@ -522,6 +522,53 @@ def test_a_fork_a_snapshot_and_a_port_ask_for_what_the_api_needs_of_them() -> No
     assert script.body(5) == {"ttlSeconds": None}
 
 
+def route(id: str, port: int, **changes: Any) -> dict[str, Any]:
+    return {
+        "id": id,
+        "sandboxId": ID,
+        "port": port,
+        "title": f"port-{port}",
+        "public": True,
+        "hidden": False,
+        "proxyPath": f"/v1/host-routes/{id}/proxy",
+        "registered": True,
+        "listening": True,
+        "proxy": "available",
+        "url": f"https://{id}.agental.site",
+        **changes,
+    }
+
+
+def test_a_sandboxs_sites_are_its_public_routes_not_taken_away_added_from_a_port_and_removed_by_their_id() -> None:
+    agental, script = scripted(
+        answer(200, sandbox()),
+        answer(200, {"routes": [route("rte_1", 3000), route("rte_2", 4000, public=False, url=None), route("rte_3", 5000, hidden=True, url=None)]}),
+        answer(201, route("rte_4", 8080)),
+        answer(201, route("rte_5", 9000, title="Preview")),
+        answer(200, {"routes": [route("rte_1", 3000), route("rte_2", 4000, public=False, url=None)]}),
+        answer(200, route("rte_1", 3000, hidden=True, url=None)),
+        answer(200, {"routes": [route("rte_2", 4000, public=False, url=None)]}),
+    )
+    box = agental.sandboxes.get(ID)
+    assert [site.id for site in box.sites()] == ["rte_1"]
+    assert (script.sent[1].method, script.sent[1].url.path) == ("GET", f"/v1/sandboxes/{ID}/host")
+
+    assert box.add_site(8080).url == "https://rte_4.agental.site"
+    assert script.sent[2].url.path == f"/v1/sandboxes/{ID}/host"
+    assert script.body(2) == {"port": 8080, "title": "port-8080", "public": True}
+    box.add_site(9000, title="Preview")
+    assert script.body(3) == {"port": 9000, "title": "Preview", "public": True}
+
+    assert box.remove_site("rte_1").hidden is True
+    assert (script.sent[5].method, script.sent[5].url.path) == ("POST", "/v1/host-routes/rte_1/hide")
+
+    # An id that is not one of its sites, as a port reached only through the API, is refused and nothing is hidden.
+    with pytest.raises(ApiError) as refused:
+        box.remove_site("rte_2")
+    assert refused.value.code == "not_found"
+    assert len(script.sent) == 7
+
+
 def stop_of(**changes: Any) -> dict[str, Any]:
     return {"sandboxId": ID, "status": "running", "autoStopAt": "2026-10-13T02:00:00.000Z", "secondsLeft": 7200, "ttlSeconds": 7200, "setBy": "ttl", **changes}
 
