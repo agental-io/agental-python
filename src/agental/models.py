@@ -2011,6 +2011,9 @@ class Webhook:
     disabled_at: str | None
     #: Why it is off, in words, as "Every try failed for 3 days."; None while it is on.
     disabled_reason: str | None
+    #: When it was last turned on again; None for one never turned off and on. An event queued
+    #: before it and not delivered was given up as the webhook went off.
+    enabled_at: str | None
     #: Given when it is made or given a new one, and never again.
     signing_secret: str | None = None
 

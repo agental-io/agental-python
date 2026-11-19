@@ -1905,6 +1905,7 @@ def hook(**changes: Any) -> dict[str, Any]:
         "enabled": True,
         "disabledAt": None,
         "disabledReason": None,
+        "enabledAt": None,
         "deliveries": [
             {"id": "dlv_1", "event": "sandbox.stopped", "status": "failed", "httpStatus": None, "error": "No answer.", "createdAt": "2026-10-15T09:01:00.000Z", "eventId": "evt_a", "attempt": 1},
         ],
@@ -1957,7 +1958,7 @@ def test_webhooks_are_listed_added_read_changed_given_a_new_secret_and_deleted_b
 def test_a_webhook_is_turned_off_and_on_again_by_calls_of_their_own_and_says_when_and_why_it_is_off() -> None:
     agental, script = scripted(
         answer(200, hook(enabled=False, disabledAt="2026-11-22T08:00:00.000Z", disabledReason="Every try failed for 3 days.")),
-        answer(200, hook()),
+        answer(200, hook(enabledAt="2026-11-23T08:00:00.000Z")),
     )
 
     off = agental.disable_webhook("wh_5b0e1d7c93a24f68")
@@ -1965,7 +1966,7 @@ def test_a_webhook_is_turned_off_and_on_again_by_calls_of_their_own_and_says_whe
     assert (script.sent[0].method, script.sent[0].url.path, script.body(0)) == ("PATCH", "/v1/webhooks/wh_5b0e1d7c93a24f68", {"enabled": False})
 
     on = agental.enable_webhook("wh_5b0e1d7c93a24f68")
-    assert (on.enabled, on.disabled_at, on.disabled_reason) == (True, None, None)
+    assert (on.enabled, on.disabled_at, on.disabled_reason, on.enabled_at) == (True, None, None, "2026-11-23T08:00:00.000Z")
     assert script.body(1) == {"enabled": True}
     assert len(script.sent) == 2
 
