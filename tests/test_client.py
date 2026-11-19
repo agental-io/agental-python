@@ -2550,6 +2550,15 @@ def test_the_organizations_job_runs_are_read_with_their_filters_and_the_jobs_usa
     assert (script.sent[1].url.path, dict(script.sent[1].url.params)) == ("/v1/usage/jobs", {"since": "2026-11-01T00:00:00Z"})
 
 
+def test_usage_by_day_reads_its_own_call_over_a_window() -> None:
+    day = {"day": "2026-11-01", "seconds": 3600, "listCostMicros": 27000, "stopped": {"seconds": 0, "listCostMicros": 0}, "snapshots": {"chargedSeconds": 0, "listCostMicros": 0}, "mail": {"received": 0, "sent": 0, "costMicros": 0}}
+    body = {"since": "2026-11-01T00:00:00.000Z", "until": "2026-11-02T00:00:00.000Z", "days": [day], "snapshots": {"kept": 2, "free": 10, "chargedSeconds": 0, "listCostMicros": 0}}
+    agental, script = scripted(answer(200, body))
+    usage = agental.usage_by_day(since="2026-11-01T00:00:00Z", until="2026-11-02T00:00:00Z")
+    assert (usage.days[0].list_cost_micros, usage.snapshots.kept) == (27000, 2)
+    assert (script.sent[0].url.path, dict(script.sent[0].url.params)) == ("/v1/usage/days", {"since": "2026-11-01T00:00:00Z", "until": "2026-11-02T00:00:00Z"})
+
+
 def test_a_list_follows_every_page_and_a_page_is_read_alone_with_its_filter_sort_and_cursor() -> None:
     agental, script = scripted(
         answer(200, {"sandboxes": [sandbox(name="a")], "nextCursor": "c1"}),

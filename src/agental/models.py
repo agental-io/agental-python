@@ -1422,6 +1422,16 @@ class Usage:
 
 
 @dataclass
+class UsageDays:
+    """Usage by UTC day and nothing else, as Usage's days, and the snapshots kept: GET /v1/usage/days."""
+
+    since: str
+    until: str
+    days: list[UsageByDay]
+    snapshots: SnapshotsUsage
+
+
+@dataclass
 class SandboxEmail:
     """Whether mail is on for a sandbox, and the domain its addresses end in."""
 

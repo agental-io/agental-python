@@ -116,6 +116,7 @@ from .models import (
     TemplateStart,
     TerminalExit,
     Usage,
+    UsageDays,
     Webhook,
     build,
     json_of,
@@ -2628,6 +2629,16 @@ class Agental:
         keys = api_key_id if api_key_id is None or isinstance(api_key_id, str) else ",".join(api_key_id)
         query = {"since": _core.iso(since), "until": _core.iso(until), "apiKeyId": keys}
         return build(Usage, self._http.run(_core.one(Call("GET", "/v1/usage", query=query, replay=True))))
+
+    def usage_by_day(self, *, since: str | datetime | None = None, until: str | datetime | None = None) -> UsageDays:
+        """Usage by UTC day and nothing else, and the snapshots kept.
+
+        Each day's running time and list cost, with stopped time, snapshots and mail beside
+        it, as usage() gives its days. Lighter than usage() on a busy account. Without since,
+        this UTC month to date.
+        """
+        query = {"since": _core.iso(since), "until": _core.iso(until)}
+        return build(UsageDays, self._http.run(_core.one(Call("GET", "/v1/usage/days", query=query, replay=True))))
 
     def metrics(self, *, at: str | datetime | None = None) -> MetricsAtMoment:
         """What each of your sandboxes read at one moment: now, unless at says another.
