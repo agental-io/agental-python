@@ -1569,8 +1569,8 @@ class BurstQuote:
     count: int
     #: All told, in millionths of a US dollar. 0 where the account is not held to a plan.
     fee_micros: int
-    #: Seconds until they would cost nothing, as the meter falls: 0 when they cost nothing now, None when they
-    #: never would, being more than the free burst.
+    #: Seconds until they would cost nothing, as earlier starts leave the 15-minute window: 0 when they cost nothing
+    #: now, None when they never would, being more than the free starts.
     free_in_seconds: int | None
     #: Whether they would take the account past its running count, which refuses them.
     over_running_count: bool
@@ -1578,14 +1578,14 @@ class BurstQuote:
 
 @dataclass
 class HeadroomNow:
-    """Where the account stands against its plan now: its running count, its burst meter against the free burst, and its burst fees against its budget.
+    """Where the account stands against its plan now: its running count, what it started in the last 15 minutes against its free starts, and its burst fees against its budget.
 
-    Counts are in small sandboxes: a tiny counts half, a medium 2, a large 4. Amounts are
+    Counts are in units: a tiny sandbox is 1, a small 2, a medium 4, a large 8. Amounts are
     millionths of a US dollar.
     """
 
-    #: Whether the account is held to its plan: a start past the running count is refused, and a fast one costs a
-    #: fee. False: what it starts is only measured.
+    #: Whether the account is held to its plan: a start past the running count is refused, and one past the free
+    #: starts costs a fee. False: what it starts is only measured.
     enforced: bool
     #: The plan it is on, "free" included, or None where plans are not enforced on it.
     plan: str | None
@@ -1593,29 +1593,30 @@ class HeadroomNow:
     limits_from: Literal["plan", "hand", "none"]
     #: The plan whose limits it has.
     limits_plan: str
-    #: Small sandboxes it runs at once at most. A create, fork or start past it is refused with running_limit_reached.
+    #: Units it runs at once at most. A create, fork or start past it is refused with running_limit_reached.
     running_units: int
-    #: Small sandboxes it starts at once for nothing. Starting faster costs a burst fee.
+    #: Units it starts for nothing in any window_minutes: three times running_units. Past them, a start costs a burst fee.
     free_burst_units: int
     #: The memory of its sandboxes running, being made or being started.
     running_mb: int
-    #: running_units in megabytes: 4096 each.
+    #: running_units in megabytes: 2048 each.
     cap_mb: int
     #: free_burst_units in megabytes.
     free_mb: int
-    #: What its burst meter reads: the memory of each start it made, halved for every half_life_minutes since.
+    #: What its burst meter reads: the memory of the starts it made in the last window_minutes.
     meter_mb: int
     #: What it may start now for nothing: free_mb less meter_mb, and no more than the room under cap_mb.
     free_now_mb: int
-    #: By how much the meter is over the free burst. While it is, every start costs a fee.
+    #: By how much the meter is over the free starts. While it is, every start costs a fee.
     over_mb: int
-    half_life_minutes: int
     #: See BurstFee.
-    fee_micros_per_gib: int
+    window_minutes: int
+    #: See BurstFee.
+    fee_micros_per_unit: int
     #: Whether it may start a sandbox at all now. A plan out of credit may not: billing() says why.
     may_start: bool
-    #: Whether it is on the free plan and has paid for nothing yet: until it has, it runs and starts at most
-    #: Prices.free.unpaid_units small sandboxes at once.
+    #: Whether it is on the free plan and has paid for nothing yet: until it has, it runs at most
+    #: Prices.free.unpaid_units units at once.
     unpaid: bool
     #: What it has spent on burst fees this month.
     spent_micros: int
@@ -1671,10 +1672,10 @@ class HeadroomSource:
 
 @dataclass
 class HeadroomBurst:
-    """A stretch when the burst meter was over the free burst, so that every start in it paid a fee."""
+    """A stretch when more than the free starts were started in 15 minutes, so that every start in it paid a fee."""
 
     started_at: str
-    #: None where the meter was still over the free burst when the range ended.
+    #: None where the meter was still over the free starts when the range ended.
     ended_at: str | None
     peak_meter_mb: int
     fees_micros: int
@@ -1718,8 +1719,8 @@ class HeadroomSpeed:
 class Headroom:
     """How close the account runs to its plan's limits.
 
-    Where it stands now, and over a range: what it ran against its running count, its burst
-    meter against its free burst, each burst, what did not start and why, and how fast what
+    Where it stands now, and over a range: what it ran against its running count, what it
+    started in each 15 minutes against its free starts, each burst, what did not start and why, and how fast what
     started ran. Amounts are millionths of a US dollar.
     """
 
@@ -2181,9 +2182,9 @@ class Plan:
     The first, "free", costs nothing and includes nothing: what it runs is paid from credits, its
     one credit for a card saved and top-ups. See Prices.free.
 
-    Counts are in small sandboxes: a tiny counts half, a medium 2, a large 4. A create, fork or
-    start past running_units raises an ApiError 429 running_limit_reached. Starting faster than
-    free_burst_units costs a burst fee: see Prices.burst_fee.
+    Counts are in units: a tiny sandbox is 1, a small 2, a medium 4, a large 8. A create, fork or
+    start past running_units raises an ApiError 429 running_limit_reached. Starting more than
+    free_burst_units in any 15 minutes costs a burst fee: see Prices.burst_fee.
     """
 
     id: str
@@ -2193,27 +2194,28 @@ class Plan:
     #: The sizes a new sandbox, fork or template start may be on the plan, smallest first. A sandbox
     #: made before a change of plan still starts at its own size. None from an API older than it.
     sizes: list[Size] | None = None
-    #: Small sandboxes the plan runs at once. None from an API older than it.
+    #: Units the plan runs at once. None from an API older than it.
     running_units: int | None = None
-    #: Small sandboxes the plan starts at once for nothing. None from an API older than it.
+    #: Units the plan starts for nothing in any 15 minutes. None from an API older than it.
     free_burst_units: int | None = None
 
 
 @dataclass
 class BurstFee:
-    """What a start costs when an account starts sandboxes faster than its plan's free burst.
+    """What a start costs when an account starts more than its plan's free starts in window_minutes.
 
-    Fees come out of the plan's credits and then the top-ups.
+    A start wholly past them pays one hour of its own list price. Fees come out of the plan's
+    credits and then the top-ups.
     """
 
-    #: How long an account's burst meter takes to fall by half. Each start adds its memory to it.
-    half_life_minutes: int
-    #: What each GiB of a start past the free burst costs, in millionths of a US dollar.
-    fee_micros_per_gib: int
+    #: How far back a start counts against the free starts: a moving window, not quarter-hours of the clock.
+    window_minutes: int
+    #: A plan's free starts are this many times its running count.
+    free_starts_per_running: int
+    #: What each unit of a start past the free starts costs, in millionths of a US dollar: one hour of a tiny's list price.
+    fee_micros_per_unit: int
     #: What an account spends on burst fees in a month at most unless it sets another budget: set_headroom_budget().
     default_budget_micros: int
-    #: The most one start costs in burst fees, in hours of its size's list price. None from an API older than it.
-    fee_cap_hours: int | None = None
 
 
 @dataclass
@@ -2309,7 +2311,7 @@ class Prices:
     top_up_range: TopUpRange | None = None
     #: None from an API older than it.
     top_up_bonus: TopUpBonus | None = None
-    #: What starting faster than a plan's free burst costs. None from an API older than it.
+    #: What a start past a plan's free starts costs. None from an API older than it.
     burst_fee: BurstFee | None = None
 
 
@@ -2325,7 +2327,7 @@ class BillingFree:
 
     #: Whether it has a card saved, which it must before it runs anything.
     card_saved: bool
-    #: Whether it has paid for anything. Until it has, it runs and starts at most unpaid_units small sandboxes at once.
+    #: Whether it has paid for anything. Until it has, it runs at most unpaid_units units at once.
     paid: bool
     unpaid_units: int
     #: What this month's use is free up to: the allowance, or 0 where its card had it on another account.
@@ -2387,7 +2389,7 @@ class Billing:
     #: True while the account must save a card, or buy a plan, before it uses agental: plans are enforced and it is
     #: on the free plan with no card saved.
     needs_plan: bool = False
-    #: The part of used_micros that is burst fees: what starts faster than the plan's free burst cost. headroom() says where the account stands.
+    #: The part of used_micros that is burst fees: what starts past the plan's free starts cost. headroom() says where the account stands.
     burst_micros: int = 0
     #: The auto-reload: the top-up the saved card is charged for when the credits run out, with its credits added before any sandbox is stopped. None while it is off.
     auto_reload: AutoReloadSetting | None = None

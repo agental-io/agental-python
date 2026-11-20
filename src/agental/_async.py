@@ -2586,9 +2586,9 @@ class AsyncAgental:
     ) -> Headroom:
         """How close the account runs to its plan's limits, in millionths of a US dollar.
 
-        now is where it stands: how many small sandboxes it runs and may run at once
-        (running_units; a tiny counts half, a medium 2, a large 4), what its burst meter reads
-        against the free burst, what it has spent on burst fees this month against its budget,
+        now is where it stands: how many units it runs and may run at once (running_units; a
+        tiny sandbox is 1, a small 2, a medium 4, a large 8), what it started in the last 15
+        minutes against its free starts, what it has spent on burst fees this month against its budget,
         and what one sandbox of each size would cost to start now. Over the range, today (UTC)
         unless from_ and to say otherwise, 90 days at most: what it ran against its running
         count (series, at_running_count_ms), each burst, what did not start and why (refused),
@@ -2596,7 +2596,7 @@ class AsyncAgental:
         two days, hour up to 8, day past that.
 
         Where now.enforced is True, a create, fork or start past the running count raises an
-        ApiError 429 running_limit_reached; one faster than the free burst costs a burst fee,
+        ApiError 429 running_limit_reached; one past the free starts costs a burst fee,
         and is refused with burst_budget_reached past the monthly budget. On the free plan,
         until the account has paid for something, the running count is Prices.free.unpaid_units.
         """
