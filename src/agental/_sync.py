@@ -1116,7 +1116,7 @@ class Sandbox:
 
     @property
     def spot(self) -> SandboxSpot | None:
-        """Its spot settings as last read, with reclaim_chance, its chance of being stopped in the next minute while it runs: a hint, not a promise. None for a normal sandbox."""
+        """Its spot settings as last read, with reclaim_chance, its chance of being stopped in the next minute while it runs: a hint, not a promise. None for a standard sandbox."""
         return self.info.spot
 
     @property
@@ -1149,8 +1149,8 @@ class Sandbox:
         ttl_seconds, in place of one set_auto_stop() moved. tags are put in place of its own,
         and metadata is merged into its own, None taking a key away: its template's stay, and
         are changed on the template. spot changes a spot sandbox's on_reclaim or warn_at; None
-        makes it a normal sandbox at the list price from then on, which, while it runs, needs room
-        under the plan's running count. A normal sandbox is never made spot (ApiError not_spot).
+        makes it a standard sandbox at the list price from then on, which, while it runs, needs room
+        under the plan's running count. A standard sandbox is never made spot (ApiError not_spot).
         """
         changes = {
             key: value
@@ -1575,7 +1575,7 @@ class Sandboxes:
         template's; Egress("box") leaves from its server whatever the template says. Residential
         asks that the account may use it: egress(), and a key with network.write. spot makes it
         a spot sandbox, as Spot(on_reclaim="upgrade"): half the list price, in spare room taken
-        back when a normal sandbox needs it, not counted in the plan's running count, and never
+        back when a standard sandbox needs it, not counted in the plan's running count, and never
         keeping its memory at a stop. It raises ApiError spot_capacity_exceeded when no server in
         the region has spare room now, and spot_needs_top_up before the account's first top-up. ssh_keys is OpenSSH
         public key lines let in as root as it is made, on top of the keys its template lets

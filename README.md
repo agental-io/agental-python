@@ -187,20 +187,20 @@ fresh = agental.sandboxes.create(snapshot_id=snapshot.id)
 
 ## Spot sandboxes
 
-Half the list price, for work that is cheap to repeat: evals, batch jobs, test runs. A spot sandbox runs in room nobody else is paying for, and that room is taken back when a normal sandbox needs it.
+Half the list price, for work that is cheap to repeat: evals, batch jobs, test runs. A spot sandbox runs in room nobody else is paying for, and that room is taken back when a standard sandbox needs it.
 
 ```python
 from agental import Spot
 
 sandbox = agental.sandboxes.create("eval-run", spot=Spot(on_reclaim="upgrade", warn_at=0.3))  # Spot() takes the defaults, "stop" and 0.5
-sandbox.spot  # on_reclaim, warn_at, reclaim_chance; None on a normal sandbox
+sandbox.spot  # on_reclaim, warn_at, reclaim_chance; None on a standard sandbox
 sandbox.update(spot=Spot(on_reclaim="delete"))
-sandbox.update(spot=None)  # a normal sandbox, at the list price from now
+sandbox.update(spot=None)  # a standard sandbox, at the list price from now
 ```
 
-- `on_reclaim` is what is done when its room is taken back: `"stop"` keeps its disk, never its memory, and it starts again as spot; `"delete"` deletes it; `"upgrade"` makes it normal at the list price and keeps it running where another server in its region has room, and stops it otherwise.
+- `on_reclaim` is what is done when its room is taken back: `"stop"` keeps its disk, never its memory, and it starts again as spot; `"delete"` deletes it; `"upgrade"` makes it standard at the list price and keeps it running where another server in its region has room, and stops it otherwise.
 - `reclaim_chance`, 0 to 1, is its chance of being stopped in the next minute, worked out every minute while it runs. It is a hint, not a promise: a burst of starts can stop it within seconds. The event `sandbox.reclaim_chance` is sent when it crosses `warn_at`, up or down.
-- It is not counted in the plan's running count. Its starts count toward the free starts, and past them pay a burst fee at the spot price, half a normal start's. A create raises `ApiError` with `spot_capacity_exceeded` when no server in the region has spare room now (try again later), and `spot_needs_top_up` before the account's first payment. It never keeps its memory: `stop(keep_memory=True)` raises `spot_keeps_no_memory`.
+- It is not counted in the plan's running count. Its starts count toward the free starts, and past them pay a burst fee at the spot price, half a standard start's. A create raises `ApiError` with `spot_capacity_exceeded` when no server in the region has spare room now (try again later), and `spot_needs_top_up` before the account's first payment. It never keeps its memory: `stop(keep_memory=True)` raises `spot_keeps_no_memory`.
 
 ## Regions
 
