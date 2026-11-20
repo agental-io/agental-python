@@ -103,6 +103,34 @@ class MachineResources:
 
 
 @dataclass
+class SandboxSpot:
+    """What makes a sandbox spot: half the list price, in room taken back when a normal sandbox needs it."""
+
+    #: What is done when its room is taken back: "delete", "stop" (its disk kept, never its memory), or "upgrade" (made normal at the list price where that frees what was needed, stopped otherwise).
+    on_reclaim: str
+    #: The chance of being stopped, 0 to 1, at which sandbox.reclaim_chance is sent.
+    warn_at: float
+    #: The chance it is stopped in the next minute, a hint and not a promise. None while it is not worked out.
+    reclaim_chance: float | None
+
+
+@dataclass
+class Spot:
+    """A spot sandbox's settings, as create() and update() send them: Spot() takes both defaults.
+
+    A spot sandbox runs at half the list price, in room on our servers nobody else is paying for,
+    and that room is taken back when a normal sandbox needs it.
+    """
+
+    #: What is done when its room is taken back. "stop" (the default): it is stopped, its disk kept, never its
+    #: memory. "delete": it is deleted. "upgrade": it becomes a normal sandbox at the list price and keeps running,
+    #: where that frees what was needed; otherwise it is stopped as "stop".
+    on_reclaim: Literal["delete", "stop", "upgrade"] | None = None
+    #: The chance of being stopped, 0 to 1, at which sandbox.reclaim_chance is sent. Left out, 0.5.
+    warn_at: float | None = None
+
+
+@dataclass
 class SandboxNetwork:
     """What a sandbox may reach outside itself: its template's rule with its own addresses on top."""
 
@@ -294,6 +322,8 @@ class SandboxInfo:
     activity: SandboxActivity | None = None
     #: The size its next start gives it, which resize() left waiting while it ran. None when none waits, and from an API older than it.
     pending_size: str | None = None
+    #: Its spot settings, or None for a normal sandbox, and from an API older than it.
+    spot: SandboxSpot | None = None
 
 
 @dataclass
