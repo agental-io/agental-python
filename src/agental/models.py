@@ -2379,6 +2379,15 @@ class BillingLapse:
 
 
 @dataclass
+class BillingSponsored:
+    """An account agental sponsors: it runs on Fleet free of charge until a card is added, which ends it."""
+
+    since: str
+    #: True while a card cannot be added, because payments are in test mode: it stays sponsored until then.
+    card_refused: bool
+
+
+@dataclass
 class Billing:
     """Where the account stands. Amounts are millionths of a US dollar."""
 
@@ -2427,6 +2436,9 @@ class Billing:
     can_auto_reload: bool = False
     #: The account's stopped sandboxes: their price, what they store, and the limits until its first top-up. None from an API older than it.
     stopped_storage: StoppedStorage | None = None
+    #: Set while agental sponsors the account: plan is Fleet, included_micros 0, nothing is owed, and plans and
+    #: top-ups are refused until a card is added. None where it is not sponsored, or from an API older than it.
+    sponsored: BillingSponsored | None = None
 
 
 @dataclass
