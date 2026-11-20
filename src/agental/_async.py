@@ -1131,7 +1131,7 @@ class AsyncSandbox:
         *,
         name: str = _UNSET,
         ttl_seconds: int | None = _UNSET,
-        on_timeout: Literal["delete", "stop"] = _UNSET,
+        on_timeout: Literal["delete", "stop", "stop_with_memory"] = _UNSET,
         tags: list[str] = _UNSET,
         metadata: dict[str, str | None] = _UNSET,
     ) -> AsyncSandbox:
@@ -1531,7 +1531,7 @@ class AsyncSandboxes:
         region: str | Sequence[str] | None = None,
         snapshot_id: str | None = None,
         ttl_seconds: int | None = _UNSET,
-        on_timeout: Literal["delete", "stop"] | None = None,
+        on_timeout: Literal["delete", "stop", "stop_with_memory"] | None = None,
         allow: list[str] | None = None,
         egress: Egress | None = None,
         ssh_keys: list[str] | None = None,
@@ -1552,7 +1552,9 @@ class AsyncSandboxes:
         template's start says, and where that says none, the deployment's default; None is
         the deployment's default whatever the template says. on_timeout is what that time
         limit does when it runs out: "delete" (the default) deletes the sandbox with its disk,
-        "stop" stops it and keeps its disk. Over max_ttl_seconds of policy()
+        "stop" stops it and keeps its disk, "stop_with_memory" keeps its memory too, so its
+        next start carries on where it was (after the account's first top-up: before it,
+        memory_needs_top_up). Over max_ttl_seconds of policy()
         it is refused with ttl_too_long. allow is the addresses it may reach on top of its
         template's outbound rule, from its first boot: the rule itself is the template's, set
         with Template.set_network(). Left out, it has none of its own. egress is where its

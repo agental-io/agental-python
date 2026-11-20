@@ -259,8 +259,8 @@ class SandboxInfo:
     stopped_at: str | None
     #: Seconds it runs after a start before it is stopped. None is the deployment's default.
     ttl_seconds: int | None
-    #: What its time limit does when it runs out: "delete" (with its disk), or "stop" and keep its disk.
-    on_timeout: Literal["delete", "stop"]
+    #: What its time limit does when it runs out: "delete" (with its disk), "stop" and keep its disk, or "stop_with_memory", keeping its memory too.
+    on_timeout: Literal["delete", "stop", "stop_with_memory"]
     #: When it is to be stopped: the time set_auto_stop() moved the stop of this run to, or else its last start and ttl_seconds. None when it is not running.
     auto_stop_at: str | None
     subdomain: str | None
