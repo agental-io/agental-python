@@ -1574,7 +1574,7 @@ class AsyncSandboxes:
         web traffic leaves from its first boot, as Egress("residential", "de"): left out, its
         template's; Egress("box") leaves from its server whatever the template says. Residential
         asks that the account may use it: egress(), and a key with network.write. spot makes it
-        a spot sandbox, as Spot(on_reclaim="upgrade"): half the list price, in spare room taken
+        a spot sandbox, as Spot(on_reclaim="delete"): half the list price, in spare room taken
         back when a standard sandbox needs it, not counted in the plan's running count, and never
         keeping its memory at a stop. It raises ApiError spot_capacity_exceeded when no server in
         the region has spare room now, and spot_needs_top_up before the account's first top-up. ssh_keys is OpenSSH
@@ -2854,6 +2854,12 @@ class AsyncAgental:
         """
         body = {"keepDays": keep_days}
         return build(DataRetention, await self._http.run(_core.one(Call("PATCH", "/v1/data-retention", body=body, replay=True))))
+
+    async def get_billing_email_copy(self) -> str | None:
+        """The address your organization's billing emails are copied to, beside its owner, or None for none. An owner sets it in the console, Billing, and it gets nothing until its inbox confirms it."""
+        answer = await self._http.run(_core.one(Call("GET", "/v1/billing/email-copy", replay=True)))
+        address = answer["address"]
+        return None if address is None else str(address)
 
     async def list_webhooks(self) -> list[Webhook]:
         """The webhooks your account's events are posted to, each with its tries of the last 30 days. Their secrets are not given."""

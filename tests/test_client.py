@@ -525,11 +525,11 @@ def test_a_fork_a_snapshot_and_a_port_ask_for_what_the_api_needs_of_them() -> No
 
 
 def test_a_spot_sandbox_is_asked_for_on_a_create_its_chance_read_changed_and_made_normal_with_none() -> None:
-    spot = {"onReclaim": "upgrade", "warnAt": 0.3, "reclaimChance": 0.12}
+    spot = {"onReclaim": "delete", "warnAt": 0.3, "reclaimChance": 0.12}
     agental, script = scripted(answer(201, sandbox(spot=spot)), answer(200, sandbox(spot={**spot, "onReclaim": "delete"})), answer(200, sandbox(spot=None)))
-    box = agental.sandboxes.create("cheap", spot=Spot(on_reclaim="upgrade", warn_at=0.3))
-    assert script.body(0) == {"name": "cheap", "spot": {"onReclaim": "upgrade", "warnAt": 0.3}}
-    assert box.spot is not None and (box.spot.on_reclaim, box.spot.reclaim_chance) == ("upgrade", 0.12)
+    box = agental.sandboxes.create("cheap", spot=Spot(on_reclaim="delete", warn_at=0.3))
+    assert script.body(0) == {"name": "cheap", "spot": {"onReclaim": "delete", "warnAt": 0.3}}
+    assert box.spot is not None and (box.spot.on_reclaim, box.spot.reclaim_chance) == ("delete", 0.12)
     box.update(spot=Spot(on_reclaim="delete"))
     assert (script.sent[1].method, script.body(1)) == ("PATCH", {"spot": {"onReclaim": "delete"}})
     assert box.spot is not None and box.spot.on_reclaim == "delete"

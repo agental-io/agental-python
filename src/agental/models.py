@@ -106,7 +106,7 @@ class MachineResources:
 class SandboxSpot:
     """What makes a sandbox spot: half the list price, in room taken back when a standard sandbox needs it."""
 
-    #: What is done when its room is taken back: "delete", "stop" (its disk kept, never its memory), or "upgrade" (made standard at the list price where that frees what was needed, stopped otherwise).
+    #: What is done when its room is taken back: "delete", or "stop" (its disk kept, never its memory).
     on_reclaim: str
     #: The chance of being stopped, 0 to 1, at which sandbox.reclaim_chance is sent.
     warn_at: float
@@ -123,9 +123,8 @@ class Spot:
     """
 
     #: What is done when its room is taken back. "stop" (the default): it is stopped, its disk kept, never its
-    #: memory. "delete": it is deleted. "upgrade": it becomes a standard sandbox at the list price and keeps running,
-    #: where that frees what was needed; otherwise it is stopped as "stop".
-    on_reclaim: Literal["delete", "stop", "upgrade"] | None = None
+    #: memory. "delete": it is deleted. One run lasts at most 24 hours, and is then stopped with its disk.
+    on_reclaim: Literal["delete", "stop"] | None = None
     #: The chance of being stopped, 0 to 1, at which sandbox.reclaim_chance is sent. Left out, 0.5.
     warn_at: float | None = None
 
@@ -340,7 +339,7 @@ class SandboxAutoStop:
     ttl_seconds: int | None
     #: ttl: its last start and ttl_seconds. account: a move by one of its account's keys, or the console.
     #: sandbox: a move by the sandbox itself. None with auto_stop_at.
-    set_by: Literal["ttl", "account", "sandbox"] | None
+    set_by: Literal["ttl", "spot_limit", "account", "sandbox"] | None
 
 
 @dataclass
