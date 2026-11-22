@@ -267,6 +267,27 @@ class SandboxActivity:
 
 
 @dataclass
+class LostSnapshot:
+    """A snapshot that was on a server that failed for good, and is gone with it."""
+
+    id: str
+    name: str
+    created_at: str
+
+
+@dataclass
+class SandboxLoss:
+    """How a sandbox whose only copy was on a failed server was lost. It cannot be started again, and stays until it is deleted."""
+
+    #: When its server was declared lost.
+    at: str
+    #: When its server last answered. Nothing of this sandbox is charged after it.
+    last_heard_at: str
+    #: The snapshots that were on that server.
+    snapshots: list[LostSnapshot]
+
+
+@dataclass
 class SandboxInfo:
     """A sandbox as the API reports it."""
 
@@ -323,6 +344,8 @@ class SandboxInfo:
     pending_size: str | None = None
     #: Its spot settings, or None for a standard sandbox, and from an API older than it.
     spot: SandboxSpot | None = None
+    #: Set when its only copy was on a server that failed for good. None for any other sandbox, and from an API older than it.
+    lost: SandboxLoss | None = None
 
 
 @dataclass
