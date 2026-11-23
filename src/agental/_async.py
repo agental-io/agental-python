@@ -58,10 +58,10 @@ from .models import (
     FileLink,
     FileWritten,
     Folder,
-    Headroom,
-    HeadroomNow,
+    Limits,
+    LimitsNow,
     PlanReplay,
-    HeadroomStep,
+    LimitsStep,
     HiddenVariable,
     HostRoute,
     Job,
@@ -2514,9 +2514,9 @@ class AsyncAgental:
         """Hides a port's address: it answers not found from then on. There is no undoing it; give the port an address again instead."""
         return build(HostRoute, await self._http.run(_core.one(Call("POST", f"/v1/host-routes/{quote(route_id, safe='')}/hide", replay=True))))
 
-    async def limits(self) -> Catalog:
+    async def sizes(self) -> Catalog:
         """The sizes on offer, the regions, and how many of your sandboxes are creating, running or stopped."""
-        return build(Catalog, await self._http.run(_core.one(Call("GET", "/v1/limits", replay=True))))
+        return build(Catalog, await self._http.run(_core.one(Call("GET", "/v1/sizes", replay=True))))
 
     async def policy(self) -> Policy:
         """What applies to every account here: how many sandboxes, how long one runs, whether ports get public addresses."""
@@ -2596,13 +2596,13 @@ class AsyncAgental:
         """The account's mail: the handle every address of its sandboxes carries, what its plan allows, and what it has had of that today."""
         return build(AccountEmail, await self._http.run(_core.one(Call("GET", "/v1/email", replay=True))))
 
-    async def headroom(
+    async def limits(
         self,
         *,
         from_: str | datetime | None = None,
         to: str | datetime | None = None,
-        step: HeadroomStep | None = None,
-    ) -> Headroom:
+        step: LimitsStep | None = None,
+    ) -> Limits:
         """How close the account runs to its plan's limits, in millionths of a US dollar.
 
         now is where it stands: how many units it runs and may run at once (running_units; a
@@ -2620,7 +2620,7 @@ class AsyncAgental:
         until the account has paid for something, the running count is Prices.free.unpaid_units.
         """
         query = {"from": _core.iso(from_), "to": _core.iso(to), "step": step}
-        return build(Headroom, await self._http.run(_core.one(Call("GET", "/v1/headroom", query=query, replay=True))))
+        return build(Limits, await self._http.run(_core.one(Call("GET", "/v1/limits", query=query, replay=True))))
 
     async def replay_last_month(self) -> PlanReplay:
         """The account's last full month priced on every plan.
@@ -2634,14 +2634,14 @@ class AsyncAgental:
         """
         return build(PlanReplay, await self._http.run(_core.one(Call("GET", "/v1/burst/replay", replay=True))))
 
-    async def set_headroom_budget(self, budget_micros: int | None) -> HeadroomNow:
+    async def set_limits_budget(self, budget_micros: int | None) -> LimitsNow:
         """Sets the most the account spends on burst fees in a month, in millionths of a US dollar.
 
         0 refuses every start that would cost one. None gives it the default again,
-        default_budget_micros. It answers with where the account stands now, as headroom().now.
+        default_budget_micros. It answers with where the account stands now, as limits().now.
         """
         body = {"budgetMicros": budget_micros}
-        return build(HeadroomNow, await self._http.run(_core.one(Call("PUT", "/v1/headroom/budget", body=body, replay=True))))
+        return build(LimitsNow, await self._http.run(_core.one(Call("PUT", "/v1/limits/budget", body=body, replay=True))))
 
     async def egress(self) -> EgressAccount:
         """Whether the account may send sandboxes out through residential addresses, and what it still needs.

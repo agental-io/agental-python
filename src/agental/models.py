@@ -1629,7 +1629,7 @@ class BurstQuote:
 
 
 @dataclass
-class HeadroomNow:
+class LimitsNow:
     """Where the account stands against its plan now: its running count, what it started in the last 15 minutes against its free starts, and its burst fees against its budget.
 
     Counts are in units: a tiny sandbox is 1, a small 2, a medium 4, a large 8. Amounts are
@@ -1683,8 +1683,8 @@ class HeadroomNow:
     quote: BurstQuote | None
 
 
-#: How often headroom() reads its series: every 10 minutes, hour or day.
-HeadroomStep = Literal["10m", "hour", "day"]
+#: How often limits() reads its series: every 10 minutes, hour or day.
+LimitsStep = Literal["10m", "hour", "day"]
 #: Why a create or start did not start. running_count: the plan's running count (running_limit_reached). budget:
 #: the month's budget for burst fees (burst_budget_reached). fee_cap: the most the caller would pay
 #: (burst_fee_too_high). room: no room on agental's servers. other: any other refusal, by its code.
@@ -1692,8 +1692,8 @@ RefusalReason = Literal["running_count", "budget", "fee_cap", "room", "other"]
 
 
 @dataclass
-class HeadroomPoint:
-    """One step of headroom()'s series."""
+class LimitsPoint:
+    """One step of limits()'s series."""
 
     #: The step's start.
     at: str
@@ -1710,7 +1710,7 @@ class HeadroomPoint:
 
 
 @dataclass
-class HeadroomSource:
+class LimitsSource:
     """Who started sandboxes in a burst, and what it cost."""
 
     #: runs-on: a runs-on repository's machine. key: a sandbox made with an API key. other: neither (made in the
@@ -1723,7 +1723,7 @@ class HeadroomSource:
 
 
 @dataclass
-class HeadroomBurst:
+class LimitsBurst:
     """A stretch when more than the free starts were started in 15 minutes, so that every start in it paid a fee."""
 
     started_at: str
@@ -1734,13 +1734,13 @@ class HeadroomBurst:
     starts: int
     #: Starts by size.
     by_size: dict[str, int]
-    by_source: list[HeadroomSource]
+    by_source: list[LimitsSource]
     #: What did not start during it, by reason (see RefusalReason).
     refused: dict[str, int]
 
 
 @dataclass
-class HeadroomRefusalCount:
+class LimitsRefusalCount:
     """How many creates and starts did not start for one reason and code, every try counted."""
 
     reason: RefusalReason
@@ -1749,15 +1749,15 @@ class HeadroomRefusalCount:
 
 
 @dataclass
-class HeadroomRefusals:
+class LimitsRefusals:
     """What did not start in the range."""
 
     total: int
-    by_reason: list[HeadroomRefusalCount]
+    by_reason: list[LimitsRefusalCount]
 
 
 @dataclass
-class HeadroomSpeed:
+class LimitsSpeed:
     """From a create or start being let through to its sandbox running, over those that ran in the range."""
 
     count: int
@@ -1768,7 +1768,7 @@ class HeadroomSpeed:
 
 
 @dataclass
-class Headroom:
+class Limits:
     """How close the account runs to its plan's limits.
 
     Where it stands now, and over a range: what it ran against its running count, what it
@@ -1776,15 +1776,15 @@ class Headroom:
     started ran. Amounts are millionths of a US dollar.
     """
 
-    now: HeadroomNow
+    now: LimitsNow
     from_: str
     to: str
-    step: HeadroomStep
-    series: list[HeadroomPoint]
+    step: LimitsStep
+    series: list[LimitsPoint]
     #: The newest first. One that paid nothing is left out.
-    bursts: list[HeadroomBurst]
-    refused: HeadroomRefusals
-    speed: HeadroomSpeed
+    bursts: list[LimitsBurst]
+    refused: LimitsRefusals
+    speed: LimitsSpeed
     #: How long, in the range, the account ran within one small sandbox of its running count.
     at_running_count_ms: int
     #: The most it ran at once in the range, in MB, and when.
@@ -2051,6 +2051,22 @@ class RunsOnSandbox:
 
 
 @dataclass
+class RunsOnWaitingJob:
+    """A GitHub Actions job refused a runner so far, and why. It is tried again every minute."""
+
+    #: GitHub's id of the job.
+    job_id: int
+    #: GitHub's id of its workflow run.
+    run_id: int
+    #: When it was first heard of.
+    since: str
+    #: pool_full, out_of_credit, payment_needed, burst_budget, running_limit, account_limit, github_unreachable, no_room or could_not_start.
+    reason: str
+    #: The reason, in words to show a person.
+    message: str
+
+
+@dataclass
 class RunsOnRepository:
     """A repository's runs-on pool: how many sandboxes of each size it keeps, the template they are made on, and the ones it has."""
 
@@ -2063,6 +2079,8 @@ class RunsOnRepository:
     sandboxes: list[RunsOnSandbox]
     #: The size a job that asks for runs-on: agental gets: its template's, or medium with none. agental-<size> gets that size. None from an API older than that.
     size: str | None = None
+    #: Its jobs refused a runner so far, the oldest first. None from an API older than that.
+    waiting: list[RunsOnWaitingJob] | None = None
 
 
 @dataclass
@@ -2266,7 +2284,7 @@ class BurstFee:
     free_starts_per_running: int
     #: What each unit of a start past the free starts costs, in millionths of a US dollar: one hour of a tiny's list price.
     fee_micros_per_unit: int
-    #: What an account spends on burst fees in a month at most unless it sets another budget: set_headroom_budget().
+    #: What an account spends on burst fees in a month at most unless it sets another budget: set_limits_budget().
     default_budget_micros: int
 
 
@@ -2450,7 +2468,7 @@ class Billing:
     #: True while the account must save a card, or buy a plan, before it uses agental: plans are enforced and it is
     #: on the free plan with no card saved.
     needs_plan: bool = False
-    #: The part of used_micros that is burst fees: what starts past the plan's free starts cost. headroom() says where the account stands.
+    #: The part of used_micros that is burst fees: what starts past the plan's free starts cost. limits() says where the account stands.
     burst_micros: int = 0
     #: The auto-reload: the top-up the saved card is charged for when the credits run out, with its credits added before any sandbox is stopped. None while it is off.
     auto_reload: AutoReloadSetting | None = None

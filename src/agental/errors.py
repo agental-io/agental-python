@@ -24,7 +24,7 @@ class ApiError(AgentalError):
         fee_micros: int | None = None,
         retry_after_seconds: int | None = None,
         refused_last_hour: int | None = None,
-        headroom_url: str | None = None,
+        limits_url: str | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -44,8 +44,8 @@ class ApiError(AgentalError):
         #: same code in the last hour, this one with them. None on any other error.
         self.refused_last_hour = refused_last_hour
         #: On a create or start refused with 429 or 409: the console's page where the account sees every refusal, as
-        #: headroom() reads them. None on any other error.
-        self.headroom_url = headroom_url
+        #: limits() reads them. None on any other error.
+        self.limits_url = limits_url
 
 
 #: The codes a create, fork or start is refused with, with the status 429, for its account's plan.

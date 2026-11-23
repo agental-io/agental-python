@@ -405,7 +405,7 @@ def test_what_is_the_callers_doing_is_not_sent_again() -> None:
     assert len(script.sent) == 2
     # A failing host is tried once more, and no more than that.
     with pytest.raises(ApiError, match="host_error"):
-        agental.limits()
+        agental.sizes()
     assert len(script.sent) == 4
 
 
@@ -890,7 +890,7 @@ def burst(**changes: Any) -> dict[str, Any]:
     }
 
 
-def headroom(**changes: Any) -> dict[str, Any]:
+def limits(**changes: Any) -> dict[str, Any]:
     return {
         "now": burst(),
         "from": "2026-11-13T00:00:00.000Z",
@@ -935,27 +935,27 @@ def test_last_month_is_read_priced_on_every_plan_with_no_amount_where_a_plan_wou
     assert agental.replay_last_month().period is None
 
 
-def test_the_headroom_is_read_over_today_or_a_range_and_its_budget_is_set_and_cleared() -> None:
+def test_the_limits_is_read_over_today_or_a_range_and_its_budget_is_set_and_cleared() -> None:
     agental, script = scripted(
-        answer(200, headroom()),
-        answer(200, headroom(step="hour")),
+        answer(200, limits()),
+        answer(200, limits(step="hour")),
         answer(200, burst(budgetMicros=0, budgetSet=True)),
         httpx.ConnectError("lost"),
         answer(200, burst()),
     )
-    read = agental.headroom()
+    read = agental.limits()
     assert (read.now.running_units, read.now.free_burst_units, read.now.next_start[2].size, read.from_, read.step) == (100, 100, "medium", "2026-11-13T00:00:00.000Z", "10m")
     assert (read.series[0].peak_running_mb, read.bursts[0].ended_at, read.bursts[0].by_source[0].name, read.bursts[0].refused) == (8192, None, "acme/web", {"running_count": 2})
     assert (read.refused.total, read.refused.by_reason[0].reason, read.speed.p50_ms, read.peak_at) == (1, "running_count", 900, "2026-11-13T00:05:00.000Z")
-    assert (script.sent[0].method, script.sent[0].url.path, script.sent[0].url.query) == ("GET", "/v1/headroom", b"")
-    agental.headroom(from_=datetime(2026, 11, 6, tzinfo=timezone.utc), to="2026-11-13T00:00:00Z", step="hour")
+    assert (script.sent[0].method, script.sent[0].url.path, script.sent[0].url.query) == ("GET", "/v1/limits", b"")
+    agental.limits(from_=datetime(2026, 11, 6, tzinfo=timezone.utc), to="2026-11-13T00:00:00Z", step="hour")
     assert script.sent[1].url.params["from"].startswith("2026-11-06T00:00:00")
     assert (script.sent[1].url.params["to"], script.sent[1].url.params["step"]) == ("2026-11-13T00:00:00Z", "hour")
 
-    assert agental.set_headroom_budget(0).budget_micros == 0
-    assert (script.sent[2].method, script.sent[2].url.path, script.body(2)) == ("PUT", "/v1/headroom/budget", {"budgetMicros": 0})
+    assert agental.set_limits_budget(0).budget_micros == 0
+    assert (script.sent[2].method, script.sent[2].url.path, script.body(2)) == ("PUT", "/v1/limits/budget", {"budgetMicros": 0})
     # Setting a budget twice sets it once, so a lost answer is sent again.
-    assert agental.set_headroom_budget(None).budget_set is False
+    assert agental.set_limits_budget(None).budget_set is False
     assert script.body(4) == {"budgetMicros": None}
 
 
@@ -984,7 +984,7 @@ def burst_refusal(code: str, fee: int, after: int | None) -> httpx.Response:
     headers = {} if after is None else {"Retry-After": str(after)}
     return answer(
         429,
-        {"error": {"code": code, "message": f"{code} it is", "feeMicros": fee, "retryAfterSeconds": after, "refusedLastHour": 3, "headroomUrl": "https://console.agental.io/headroom"}},
+        {"error": {"code": code, "message": f"{code} it is", "feeMicros": fee, "retryAfterSeconds": after, "refusedLastHour": 3, "limitsUrl": "https://console.agental.io/limits"}},
         **headers,
     )
 
@@ -998,10 +998,10 @@ def test_a_start_refused_for_its_burst_says_what_it_would_cost_and_when_it_would
     with pytest.raises(ApiError) as running:
         agental.sandboxes.create()
     assert (running.value.code, running.value.fee_micros, running.value.retry_after_seconds) == ("running_limit_reached", 0, None)
-    assert (running.value.refused_last_hour, running.value.headroom_url) == (3, "https://console.agental.io/headroom")
+    assert (running.value.refused_last_hour, running.value.limits_url) == (3, "https://console.agental.io/limits")
     with pytest.raises(ApiError) as other:
         agental.sandboxes.create()
-    assert (other.value.fee_micros, other.value.retry_after_seconds, other.value.refused_last_hour, other.value.headroom_url) == (None, None, None, None)
+    assert (other.value.fee_micros, other.value.retry_after_seconds, other.value.refused_last_hour, other.value.limits_url) == (None, None, None, None)
     assert len(script.sent) == 3
 
 
@@ -1050,19 +1050,19 @@ def test_the_client_that_awaits_waits_out_a_burst_and_reads_the_burst_the_same(m
         slept.append(seconds)
 
     monkeypatch.setattr("agental._async.asyncio.sleep", no_sleep)
-    script = Script(answer(200, headroom()), burst_refusal("burst_fee_too_high", 64_000, 12), answer(201, sandbox(), **{"Agental-Burst-Fee": "0"}), answer(200, burst(spentMicros=0)))
+    script = Script(answer(200, limits()), burst_refusal("burst_fee_too_high", 64_000, 12), answer(201, sandbox(), **{"Agental-Burst-Fee": "0"}), answer(200, burst(spentMicros=0)))
 
     async def main() -> None:
         client = httpx.AsyncClient(transport=httpx.MockTransport(script))
         async with AsyncAgental("key_test", base_url="https://api.test", retry_delay=0, poll_interval=0, http_client=client) as agental:
-            assert (await agental.headroom()).now.budget_micros == 50_000_000
+            assert (await agental.limits()).now.budget_micros == 50_000_000
             box = await agental.sandboxes.create(max_burst_fee_micros=0, max_burst_wait=30)
             assert box.burst_fee_micros == 0
-            assert (await agental.set_headroom_budget(None)).spent_micros == 0
+            assert (await agental.set_limits_budget(None)).spent_micros == 0
 
     asyncio.run(main())
     assert slept == [12]
-    assert [(each.method, each.url.path) for each in script.sent] == [("GET", "/v1/headroom"), ("POST", "/v1/sandboxes"), ("POST", "/v1/sandboxes"), ("PUT", "/v1/headroom/budget")]
+    assert [(each.method, each.url.path) for each in script.sent] == [("GET", "/v1/limits"), ("POST", "/v1/sandboxes"), ("POST", "/v1/sandboxes"), ("PUT", "/v1/limits/budget")]
 
 
 def test_the_usage_and_the_policy_say_what_mail_there_was_and_whether_there_is_any() -> None:
