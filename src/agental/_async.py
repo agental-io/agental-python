@@ -64,6 +64,8 @@ from .models import (
     LimitsStep,
     HiddenVariable,
     HostRoute,
+    OrganizationSiteAnalytics,
+    SiteAnalytics,
     Job,
     JobRun,
     JobRunWithOutput,
@@ -1509,9 +1511,28 @@ class AsyncSandbox:
         Only one of this sandbox's sites: any other id, of another sandbox or of a port reached only through the API,
         is refused as not_found before anything is taken away.
         """
+        await self._require_site(site_id)
+        return build(HostRoute, await self._http.run(_core.one(Call("POST", f"/v1/host-routes/{quote(site_id, safe='')}/hide", replay=True))))
+
+    async def site_analytics(self, site_id: str, *, range: Literal["24h", "7d"] | None = None) -> SiteAnalytics:
+        """A site's visits, page views and top pages, sources, countries, devices and browsers, over the last 7 days or 24 hours.
+
+        A visit is one address and browser on one site on one UTC day. Only one of this sandbox's sites: any other id is refused
+        as not_found before anything is read.
+        """
+        await self._require_site(site_id)
+        query = {"range": range}
+        return build(SiteAnalytics, await self._http.run(_core.one(Call("GET", f"/v1/host-routes/{quote(site_id, safe='')}/analytics", query=query, replay=True))))
+
+    async def set_site_analytics(self, site_id: str, enabled: bool) -> SiteAnalytics:
+        """Turns a site's analytics on or off. Off deletes its figures at once. Only one of this sandbox's sites, as site_analytics."""
+        await self._require_site(site_id)
+        body = {"enabled": enabled}
+        return build(SiteAnalytics, await self._http.run(_core.one(Call("PUT", f"/v1/host-routes/{quote(site_id, safe='')}/analytics", body=body, replay=True))))
+
+    async def _require_site(self, site_id: str) -> None:
         if not any(site.id == site_id for site in await self.sites()):
             raise ApiError(404, "not_found", f"{site_id} is not a site of this sandbox.")
-        return build(HostRoute, await self._http.run(_core.one(Call("POST", f"/v1/host-routes/{quote(site_id, safe='')}/hide", replay=True))))
 
     async def usage(self, *, since: str | datetime | None = None, until: str | datetime | None = None) -> SandboxUsage:
         """How long it has run and what that comes to at the list price, and the mail it has had. Without since, its whole life."""
@@ -2596,6 +2617,22 @@ class AsyncAgental:
         """The account's mail: the handle every address of its sandboxes carries, what its plan allows, and what it has had of that today."""
         return build(AccountEmail, await self._http.run(_core.one(Call("GET", "/v1/email", replay=True))))
 
+    async def organization_site_analytics(self) -> OrganizationSiteAnalytics:
+        """Whether the organization's sites are counted, whether turning that on needs informed, and how many days figures are kept."""
+        return build(OrganizationSiteAnalytics, await self._http.run(_core.one(Call("GET", "/v1/site-analytics", replay=True))))
+
+    async def set_organization_site_analytics(self, enabled: bool, *, informed: bool | None = None) -> OrganizationSiteAnalytics:
+        """Turns the organization's site analytics on or off. Off deletes every site's figures at once.
+
+        On Enterprise or with a server of your own, on is refused with 409 notice_required until informed is True.
+        Pass it only once a person has been shown that these figures, page names included, are kept on agental's side,
+        and that error logs can hold a request's details for up to 30 days. It is never sent for you.
+        """
+        body: dict[str, Any] = {"enabled": enabled}
+        if informed is not None:
+            body["informed"] = informed
+        return build(OrganizationSiteAnalytics, await self._http.run(_core.one(Call("PUT", "/v1/site-analytics", body=body, replay=True))))
+
     async def limits(
         self,
         *,
@@ -2870,8 +2907,8 @@ class AsyncAgental:
         """Adds a webhook, and gives its signing secret in signing_secret, the one time it is given.
 
         url is posted each event it takes, and has to be on the public internet. events names
-        the kinds it takes, such as sandbox.stopped or headroom.burst_ended, a group of them by
-        its name and .*, such as "headroom.*", which takes the group's kinds added later too, or
+        the kinds it takes, such as sandbox.stopped or limits.burst_ended, a group of them by
+        its name and .*, such as "limits.*", which takes the group's kinds added later too, or
         "*" for every one and any added later, which is what it takes when events is left out.
         A * anywhere else is refused. Each post's X-Agental-Signature is
         checked against the secret with verify_webhook. It is sent once, so a lost answer is

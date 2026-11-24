@@ -587,6 +587,62 @@ def test_a_sandboxs_sites_are_its_public_routes_not_taken_away_added_from_a_port
     assert len(script.sent) == 7
 
 
+def test_a_sites_analytics_are_read_and_switched_only_for_a_site_of_this_sandbox_and_informed_is_sent_only_when_given() -> None:
+    routes = {"routes": [route("rte_1", 3000), route("rte_2", 4000, public=False, url=None)]}
+    count = {"name": "/", "count": 5}
+    report = {
+        "siteId": "rte_1",
+        "enabled": True,
+        "organizationEnabled": True,
+        "range": "24h",
+        "visits": 5,
+        "pageViews": 10,
+        "requests": 20,
+        "errors": 1,
+        "visitsChangePercent": None,
+        "listsFrom": "2026-11-23",
+        "series": [{"at": "2026-11-23T10:00:00.000Z", "visits": 5, "views": 10}],
+        "pages": [count],
+        "sources": [],
+        "countries": [],
+        "devices": [],
+        "browsers": [],
+    }
+    setting = {"enabled": True, "noticeRequired": True, "keptDays": 7}
+    agental, script = scripted(
+        answer(200, sandbox()),
+        answer(200, routes),
+        answer(200, report),
+        answer(200, routes),
+        answer(200, {**report, "enabled": False}),
+        answer(200, routes),
+        answer(200, routes),
+        answer(200, setting),
+        answer(200, setting),
+        answer(200, setting),
+    )
+    box = agental.sandboxes.get(ID)
+    read = box.site_analytics("rte_1", range="24h")
+    assert (read.visits, read.page_views, read.pages[0].name, read.series[0].views, read.visits_change_percent) == (5, 10, "/", 10, None)
+    assert (script.sent[2].method, script.sent[2].url.path, script.sent[2].url.params["range"]) == ("GET", "/v1/host-routes/rte_1/analytics", "24h")
+    assert box.set_site_analytics("rte_1", False).enabled is False
+    assert (script.sent[4].method, script.sent[4].url.path) == ("PUT", "/v1/host-routes/rte_1/analytics")
+    assert script.body(4) == {"enabled": False}
+
+    for refused_call in (lambda: box.site_analytics("rte_2"), lambda: box.set_site_analytics("rte_2", True)):
+        with pytest.raises(ApiError) as refused:
+            refused_call()
+        assert refused.value.code == "not_found"
+    assert len(script.sent) == 7
+
+    assert agental.organization_site_analytics().kept_days == 7
+    assert (script.sent[7].method, script.sent[7].url.path) == ("GET", "/v1/site-analytics")
+    agental.set_organization_site_analytics(True)
+    assert script.body(8) == {"enabled": True}
+    agental.set_organization_site_analytics(True, informed=True)
+    assert script.body(9) == {"enabled": True, "informed": True}
+
+
 def stop_of(**changes: Any) -> dict[str, Any]:
     return {"sandboxId": ID, "status": "running", "autoStopAt": "2026-10-13T02:00:00.000Z", "secondsLeft": 7200, "ttlSeconds": 7200, "setBy": "ttl", **changes}
 

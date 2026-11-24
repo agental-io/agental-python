@@ -1876,6 +1876,63 @@ class MetricsReading:
 
 
 @dataclass
+class SiteCount:
+    """One row of a site's top list: a page, a source, a country, a device or a browser."""
+
+    name: str
+    count: int
+
+
+@dataclass
+class SitePoint:
+    """A site's visits and page views in one hour (over 24h) or one UTC day (over 7d)."""
+
+    at: str
+    visits: int
+    views: int
+
+
+@dataclass
+class SiteAnalytics:
+    """A site's figures. A visit is one visitor on one site on one UTC day; bots are left out."""
+
+    site_id: str
+    #: This site's own switch.
+    enabled: bool
+    #: The organization's switch, which each site's applies within.
+    organization_enabled: bool
+    range: Literal["24h", "7d"]
+    visits: int
+    page_views: int
+    #: Over 24h, of today UTC, as lists_from says.
+    requests: int
+    #: Answers of 500 or more. Over 24h, of today UTC.
+    errors: int
+    #: 24h: against the 24 hours before. 7d: the last 3 days against the 3 before. None with nothing to compare.
+    visits_change_percent: int | None
+    #: The first UTC day the lists and the request counts cover.
+    lists_from: str
+    series: list[SitePoint]
+    #: Paths with no query, and id-, token- and email-like parts collapsed.
+    pages: list[SiteCount]
+    #: Domains, or Direct.
+    sources: list[SiteCount]
+    countries: list[SiteCount]
+    devices: list[SiteCount]
+    browsers: list[SiteCount]
+
+
+@dataclass
+class OrganizationSiteAnalytics:
+    """Whether the organization's sites are counted."""
+
+    enabled: bool
+    #: True on Enterprise or with a server of your own: turning analytics on needs informed=True.
+    notice_required: bool
+    kept_days: int
+
+
+@dataclass
 class SandboxMetrics:
     """What one sandbox read between two moments."""
 
@@ -2048,6 +2105,8 @@ class RunsOnSandbox:
     size: str
     #: Whether a job holds it now.
     busy: bool
+    #: Kept as a failed job left it until this time, and given to no job. None for a sandbox in its pool.
+    held_until: str | None = None
 
 
 @dataclass
