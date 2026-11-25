@@ -8,7 +8,7 @@ import builtins
 import json
 import logging
 import uuid
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from datetime import datetime
 from types import TracebackType
 from typing import Any, Literal, overload
@@ -41,6 +41,7 @@ from .models import (
     BillingInvoices,
     Checkout,
     Command,
+    CommandOutputEvent,
     CreateApiKey,
     CreatedApiKey,
     DataRetention,
@@ -149,7 +150,9 @@ class _Http:
         self._client = client or httpx.AsyncClient()
 
     def _headers(self, call: Call) -> dict[str, str]:
-        return {"Authorization": f"Bearer {self.config.api_key}", "Accept": "application/json", "User-Agent": _USER_AGENT, **call.headers}
+        # A body of bytes is sent as it is, as a command's stdin is.
+        sent_as = {"Content-Type": "application/octet-stream"} if isinstance(call.body, bytes) else {}
+        return {"Authorization": f"Bearer {self.config.api_key}", "Accept": "application/json", "User-Agent": _USER_AGENT, **sent_as, **call.headers}
 
     def _query(self, call: Call) -> dict[str, str | list[str]]:
         return {name: value for name, value in (call.query or {}).items() if value is not None}
@@ -164,7 +167,8 @@ class _Http:
                     call.method,
                     f"{self.config.base_url}{call.path}",
                     params=self._query(call),
-                    json=call.body,
+                    content=call.body if isinstance(call.body, bytes) else None,
+                    json=None if isinstance(call.body, bytes) else call.body,
                     headers=self._headers(call),
                     timeout=httpx.Timeout(call.timeout, connect=10.0),
                 )
@@ -224,6 +228,32 @@ class _Http:
         except httpx.HTTPError as error:
             raise AgentalConnectionError(f"The stream was cut: {error}") from error
         reader.ended()
+
+    async def events(self, call: Call) -> AsyncGenerator[tuple[str, str], None]:
+        """The server-sent events a GET is answered with, as (event, data), each as it arrives.
+
+        call.timeout is the longest the stream may be silent. A refusal before the stream
+        begins is raised as the API's error; a stream cut short ends without one.
+        """
+        lines = _core.EventLines()
+        try:
+            async with self._client.stream(
+                call.method,
+                f"{self.config.base_url}{call.path}",
+                params=self._query(call),
+                headers={**self._headers(call), "Accept": "text/event-stream"},
+                timeout=httpx.Timeout(call.timeout, connect=10.0),
+            ) as response:
+                if not response.is_success:
+                    await response.aread()
+                    raise _core.error_of(response.status_code, response.text)
+                # An event not ended by a blank line when the stream closes was cut, and is not given.
+                async for line in response.aiter_lines():
+                    event = lines.line(line)
+                    if event is not None:
+                        yield event
+        except httpx.HTTPError as error:
+            raise AgentalConnectionError(f"The stream was cut: {error}") from error
 
     async def aclose(self) -> None:
         if self._owned:
@@ -647,32 +677,229 @@ class AsyncDesktop:
         await self._http.run(_core.one(Call("POST", f"{self._path}/{what}", body=body)))
 
 
+class AsyncCommandStdin:
+    """A command's stdin, written from where it stands: what commands.stdin() gives.
+
+    It keeps offset, the bytes of stdin the command has accepted, so each write goes on from
+    the last one. Use one writer per command: two that write at once overwrite neither, and
+    the bytes of one of them are skipped as already accepted.
+    """
+
+    def __init__(self, http: _Http, path: str, command_id: str, offset: int | None) -> None:
+        self._http = http
+        self._path = path
+        self._command_id = command_id
+        #: The bytes of stdin accepted so far. None until the first write reads it from the command.
+        self.offset = offset
+
+    async def write(self, data: str | bytes) -> int:
+        """Writes all of data, text as UTF-8, and answers the offset after it.
+
+        It is sent in pieces of at most 1 MiB, and waits for as long as the command does not read
+        them: a command that is not reading takes part of a piece, and the rest is sent again.
+        A command that ended, or a stdin that was closed, is raised as ApiError command_ended or
+        stdin_closed.
+        """
+        raw = data.encode("utf-8") if isinstance(data, str) else bytes(data)
+        if self.offset is None:
+            stdin = (await self._http.run(_core.one(Call("GET", f"{self._path}/{quote(self._command_id, safe='')}", replay=True))))["stdin"]
+            if stdin is None:
+                raise ApiError(409, "no_stdin", f"Command {self._command_id} was started without stdin=True: its stdin is /dev/null.")
+            self.offset = int(stdin["offset"])
+        if not raw:
+            return self.offset
+        self.offset = int(await self._http.run(_core.write_stdin(self._path, self._command_id, raw, self.offset, self._http.config)))
+        return self.offset
+
+    async def close(self) -> int:
+        """Closes stdin after what was written: the command reads EOF. Closing it twice is fine. It answers the final offset."""
+        self.offset = int((await self._http.run(_core.one(Call("POST", f"{self._path}/{quote(self._command_id, safe='')}/stdin/close", replay=True))))["offset"])
+        return self.offset
+
+
 class AsyncCommands:
-    """Commands left running in the background: started, and looked at later."""
+    """Commands left running in the background: started, and looked at, followed, written to and signaled later.
+
+    A command runs until it exits, its time limit runs out, or its sandbox stops, whether or not
+    anyone is watching: a closed client or a dropped connection does not end it.
+    """
 
     def __init__(self, http: _Http, path: str) -> None:
         self._http = http
         self._path = path
 
-    async def start(self, command: CommandLine, *, timeout: float | None = None) -> Command:
-        """Starts a command and answers at once. It may run for up to ten minutes."""
-        return build(Command, await self._http.run(_core.start_command(self._path, command, _ms(timeout))))
+    def _command(self, command_id: str) -> str:
+        return f"{self._path}/{quote(command_id, safe='')}"
+
+    async def start(
+        self,
+        command: CommandLine,
+        *,
+        timeout: float | None = None,
+        no_timeout: bool = False,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        stdin: bool = False,
+    ) -> Command:
+        """Starts a command and answers at once, with the command as it is then.
+
+        timeout is seconds, 0.1 to 600, 60 unless given. no_timeout=True gives it no limit of its own:
+        it runs until it exits or its sandbox stops, and a sandbox has no time limit unless one is
+        set, so that can be never. A running command does not keep its sandbox running or change
+        what it costs.
+
+        cwd is the absolute folder it runs in; one that is not a folder is refused with 400 before
+        anything runs. env is variables for this command alone, on top of the sandbox's own:
+        agental never writes their values to its records or logs, though the running process
+        holds them. Names starting AGENTAL_ and those of variables kept out of the sandbox are
+        refused. The command, its cwd and its variables are at most 63 KiB together.
+
+        stdin=True lets stdin() write to it and close it; otherwise its stdin is /dev/null.
+        """
+        extra = _core.start_extra(timeout, no_timeout, cwd, env, stdin)
+        return build(Command, await self._http.run(_core.start_command(self._path, command, _ms(timeout), extra)))
+
+    async def list(self, *, limit: int | None = None) -> builtins.list[Command]:
+        """The sandbox's commands, running and ended, the latest first: limit of them, 1 to 100, 50 unless given.
+
+        Each is as last saved, so a running one's state is up to 30 seconds old here, and its
+        output is left out: stdout and stderr are "". get() reads one as it is now.
+        """
+        query = {"limit": str(limit)} if limit is not None else None
+        answer = await self._http.run(_core.one(Call("GET", self._path, query=query, replay=True)))
+        return [build(Command, {"stdout": "", "stderr": "", **each}) for each in answer["commands"]]
 
     async def get(self, command_id: str) -> Command:
-        """A command's status, running, succeeded, failed or timed_out, with its exit code and its output so far."""
-        return build(Command, await self._http.run(_core.one(Call("GET", f"{self._path}/{quote(command_id, safe='')}", replay=True))))
+        """A command as it is now: its status and how it ended, its stdin, and the last 65,536 characters of each of its streams."""
+        return build(Command, await self._http.run(_core.one(Call("GET", self._command(command_id), replay=True))))
 
-    async def wait(self, command_id: str, *, timeout: float = _core.COMMAND_TIMEOUT) -> Command:
-        """Reads a command until it has ended."""
+    async def wait(self, command_id: str, *, timeout: float | None = _core.COMMAND_TIMEOUT) -> Command:
+        """Reads a command until it has ended: within timeout seconds, or for as long as it takes with None.
+
+        One still running when the time is out raises AgentalTimeoutError, and runs on.
+        """
         return build(Command, await self._http.run(_core.wait_command(self._path, command_id, timeout, self._http.config)))
 
-    async def run(self, command: CommandLine, *, timeout: float | None = None) -> Command:
+    async def output(self, command_id: str, *, stdout: int = 0, stderr: int = 0, follow: bool = True) -> AsyncIterator[CommandOutputEvent]:
+        """A command's output, from byte offsets stdout and stderr, each piece as it arrives.
+
+        Each stream keeps its last 1 MiB while its sandbox runs: bytes overwritten before they
+        were read come as a gap event, never silently missing. With follow, it goes on until the
+        command ends, and gives an end event with the command as it ended; without, it gives
+        what is there now, and an end event only for a command that has ended.
+
+        A stream that is cut, or that the API closes after 5 minutes, is opened again from the
+        byte after the last one given, so nothing comes twice. It gives up after 5 cuts in a row
+        with nothing read. Once its sandbox's machine is gone the output is too: that raises
+        ApiError output_gone, and get() has the last of it as last saved. Reading output never
+        affects the command.
+        """
+        reader = _core.OutputReader(stdout, stderr)
+        cuts = 0
+        # Continues in a row that moved no offset: they make the wait grow, and never give up.
+        empty = 0
+        while True:
+            reader.connected()
+            got_any = False
+            was_at = dict(reader.at)
+            cut: AgentalError
+            events = self._http.events(reader.call(self._path, command_id, follow))
+            try:
+                async for name, data in events:
+                    event = reader.event(name, data)
+                    if event is not None:
+                        got_any = True
+                        yield event
+                    if reader.ended:
+                        return
+                if reader.continued:
+                    if not follow:
+                        return
+                    if reader.at != was_at:
+                        # The API's close after 5 minutes: go on at once.
+                        cuts = empty = 0
+                        continue
+                    # Nothing moved: the command has exited and its end is not recorded yet, which it is within
+                    # 30 seconds. Wait a little longer each time, and keep the count of cuts as it was.
+                    await asyncio.sleep(min(_core.OUTPUT_EMPTY_CONTINUE_WAIT, self._http.config.retry_delay * 2**empty))
+                    empty += 1
+                    continue
+                cut = AgentalConnectionError(f"The output of command {command_id} was cut before it ended.")
+            except AgentalError as error:
+                if not _core.output_resumable(error):
+                    raise
+                cut = error
+            finally:
+                # Closed here, not when it is collected, so that its HTTP stream is let go at once.
+                await events.aclose()
+            if got_any:
+                cuts = empty = 0
+            if cuts >= _core.OUTPUT_RECONNECTS:
+                raise cut
+            await asyncio.sleep(min(30.0, self._http.config.retry_delay * 2**cuts))
+            cuts += 1
+
+    async def write_stdin(self, command_id: str, data: bytes, *, offset: int) -> int:
+        """Writes up to 1 MiB to a command's stdin, at offset: the bytes of it accepted before them. It answers the bytes accepted so far.
+
+        Bytes already accepted are skipped, so sending a write again is safe. A command that is
+        not reading takes part of it within 20 seconds, and the answer is then less than offset
+        plus the bytes sent: send the rest later. An offset past the next byte is refused with
+        ApiError stdin_offset, whose offset says where to send from; stdin_unreachable means send
+        the same offset again. stdin() does all of this.
+        """
+        return int((await self._http.run(_core.one(_core.stdin_call(self._path, command_id, data, offset))))["offset"])
+
+    def stdin(self, command_id: str, *, offset: int | None = None) -> AsyncCommandStdin:
+        """A writer of a command started with stdin=True, from offset, or from where its stdin stands now when None.
+
+        It keeps the offset, sends large data in pieces of 1 MiB, and sends again what was not
+        taken. A command keeps at most 1 MiB of stdin it has not read yet.
+        """
+        return AsyncCommandStdin(self._http, self._path, command_id, offset)
+
+    async def close_stdin(self, command_id: str) -> int:
+        """Closes a command's stdin after what was written: it reads EOF. Closing it twice is fine. It answers the bytes accepted in all."""
+        return await AsyncCommandStdin(self._http, self._path, command_id, None).close()
+
+    async def signal(self, command_id: str, signal: str) -> int:
+        """Sends a signal to every process of a command, those it started in the background included, and answers how many it reached.
+
+        signal is TERM, KILL, INT, HUP, QUIT, USR1, USR2, STOP or CONT ("SIGTERM" is taken too).
+        It reaches what an ended command left running, too, while its sandbox still holds it.
+        """
+        return int(await self._http.run(_core.signal_command(self._path, command_id, signal)))
+
+    async def kill(self, command_id: str, *, grace: float = 5.0) -> Command:
+        """Stops a command gracefully: sends TERM, waits up to grace seconds for it to end, then sends KILL. It answers the command as it ended."""
+        return build(Command, await self._http.run(_core.kill_command(self._path, command_id, grace, self._http.config)))
+
+    async def delete(self, command_id: str) -> None:
+        """Forgets an ended command and its output.
+
+        One still running is refused with ApiError still_running, and one that ended but left
+        processes running with has_processes: signal it first, which reaches them too.
+        """
+        await self._http.run(_core.one(Call("DELETE", self._command(command_id))))
+
+    async def run(
+        self,
+        command: CommandLine,
+        *,
+        timeout: float | None = None,
+        no_timeout: bool = False,
+        cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
+        stdin: bool = False,
+    ) -> Command:
         """Starts a command and waits for it by reading it, so no request stays open while it runs.
 
         Use it for one that takes more than a minute: a request held open that long may be
-        cut by a proxy on the way.
+        cut by a proxy on the way. It takes what start() takes. With no_timeout=True it waits for
+        as long as the command runs, which can be never; otherwise for at most 11 minutes.
         """
-        return build(Command, await self._http.run(_core.run_command(self._path, command, _ms(timeout), self._http.config)))
+        extra = _core.start_extra(timeout, no_timeout, cwd, env, stdin)
+        return build(Command, await self._http.run(_core.run_command(self._path, command, _ms(timeout), self._http.config, extra)))
 
 
 class AsyncEmail:

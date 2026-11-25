@@ -17,6 +17,7 @@ CHANGES = [
     (r"\bimport asyncio\b", "import time"),
     (r"\basyncio\.sleep\b", "time.sleep"),
     (r"\bAsyncIterator\b", "Iterator"),
+    (r"\bAsyncGenerator\[(.*), None\]", r"Generator[\1, None, None]"),
     (r"\bhttpx\.AsyncClient\b", "httpx.Client"),
     (r"\basync (def|with|for)\b", r"\1"),
     (r"\bawait ", ""),

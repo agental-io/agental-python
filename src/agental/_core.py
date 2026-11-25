@@ -22,7 +22,7 @@ from typing import Any
 from urllib.parse import quote
 
 from .errors import AgentalConnectionError, AgentalError, AgentalTimeoutError, ApiError, ProxyError
-from .models import ExecEvent, TerminalExit
+from .models import Command, CommandOutputEvent, ExecEvent, TerminalExit, build
 
 DEFAULT_BASE_URL = "https://agental.io"
 
@@ -117,6 +117,7 @@ def error_of(status: int, text: str) -> AgentalError:
             room = error.get("regionsWithRoom")
             regions = [one for one in room if isinstance(one, str)] if isinstance(room, list) else None
             fee, after, refused, url = error.get("feeMicros"), error.get("retryAfterSeconds"), error.get("refusedLastHour"), error.get("limitsUrl")
+            offset = error.get("offset")
             return ApiError(
                 status,
                 error["code"],
@@ -126,6 +127,7 @@ def error_of(status: int, text: str) -> AgentalError:
                 retry_after_seconds=after if isinstance(after, int) and not isinstance(after, bool) else None,
                 refused_last_hour=refused if isinstance(refused, int) and not isinstance(refused, bool) else None,
                 limits_url=url if isinstance(url, str) else None,
+                offset=offset if isinstance(offset, int) and not isinstance(offset, bool) else None,
             )
     except (ValueError, AttributeError, KeyError, TypeError):
         pass
@@ -337,21 +339,121 @@ def stop(path: str, keep_memory: bool, timeout: float, config: Settings) -> Step
     return info
 
 
-def start_command(path: str, command: str | list[str] | tuple[str, ...], timeout_ms: int | None) -> Steps:
-    started = yield from one(command_call(path, command, timeout_ms))
-    return (yield from one(Call("GET", f"{path}/{started['id']}", replay=True)))
+def start_command(path: str, command: str | list[str] | tuple[str, ...], timeout_ms: int | None, extra: dict[str, Any] | None = None) -> Steps:
+    """Starts a command and reads it. extra is what the start is sent with besides the command and its time limit:
+    cwd, env, stdin, or timeoutMs None for no limit."""
+    call = command_call(path, command, timeout_ms)
+    call.body.update(extra or {})
+    started = yield from one(call)
+    return (yield from one(Call("GET", f"{path}/{quote(started['id'], safe='')}", replay=True)))
 
 
-def wait_command(path: str, command_id: str, timeout: float, config: Settings) -> Steps:
-    """Reads a command until it has ended."""
-    deadline = time.monotonic() + timeout
+def start_extra(timeout: float | None, no_timeout: bool, cwd: str | None, env: Mapping[str, str] | None, stdin: bool) -> dict[str, Any]:
+    """What a start is sent with besides the command and a time limit it was given, or an error that says what is wrong."""
+    extra: dict[str, Any] = {}
+    if no_timeout:
+        if timeout is not None:
+            raise AgentalError("A command has a timeout or no_timeout=True, not both.")
+        extra["timeoutMs"] = None
+    if cwd is not None:
+        extra["cwd"] = cwd
+    if env is not None:
+        extra["env"] = dict(env)
+    if stdin:
+        extra["stdin"] = True
+    return extra
+
+
+def wait_command(path: str, command_id: str, timeout: float | None, config: Settings) -> Steps:
+    """Reads a command until it has ended: within timeout seconds, or for as long as it takes with None."""
+    deadline = None if timeout is None else time.monotonic() + timeout
     while True:
-        command = yield from one(Call("GET", f"{path}/{command_id}", replay=True))
+        command = yield from one(Call("GET", f"{path}/{quote(command_id, safe='')}", replay=True))
         if command["status"] != "running":
             return command
-        if time.monotonic() + config.poll_interval > deadline:
+        if deadline is not None and time.monotonic() + config.poll_interval > deadline:
             raise AgentalTimeoutError(f"Command {command_id} was still running after {timeout:g} s.")
         yield Sleep(config.poll_interval)
+
+
+#: The signals a command can be sent.
+COMMAND_SIGNALS = frozenset({"TERM", "KILL", "INT", "HUP", "QUIT", "USR1", "USR2", "STOP", "CONT"})
+#: How long a command is waited for after KILL: it ends at once, unless its sandbox does not answer.
+KILL_WAIT = 30.0
+
+
+def signal_command(path: str, command_id: str, signal: str) -> Steps:
+    """Sends a signal to every process of a command. It answers how many it reached."""
+    name = signal.upper().removeprefix("SIG")
+    if name not in COMMAND_SIGNALS:
+        raise AgentalError(f"A command is sent one of {', '.join(sorted(COMMAND_SIGNALS))}, not {signal!r}.")
+    answer = yield from one(Call("POST", f"{path}/{quote(command_id, safe='')}/signal", body={"signal": name}))
+    return int(answer["signaled"])
+
+
+def kill_command(path: str, command_id: str, grace: float, config: Settings) -> Steps:
+    """Sends TERM, waits up to grace seconds for the command to end, then sends KILL and waits for it to end."""
+    if grace < 0:
+        raise AgentalError(f"grace is seconds, 0 or more, not {grace!r}.")
+    yield from signal_command(path, command_id, "TERM")
+    deadline = time.monotonic() + grace
+    while True:
+        command = yield from one(Call("GET", f"{path}/{quote(command_id, safe='')}", replay=True))
+        if command["status"] != "running":
+            return command
+        if time.monotonic() + config.poll_interval >= deadline:
+            break
+        yield Sleep(config.poll_interval)
+    yield from signal_command(path, command_id, "KILL")
+    return (yield from wait_command(path, command_id, KILL_WAIT, config))
+
+
+#: The most bytes the API takes in one write of a command's stdin.
+STDIN_PIECE = 1024 * 1024
+
+
+def stdin_call(path: str, command_id: str, data: bytes, offset: int) -> Call:
+    """One write of a command's stdin, at offset. Sending it twice is safe: bytes already accepted are skipped."""
+    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+        raise AgentalError(f"offset is a whole number of bytes, 0 or more, not {offset!r}.")
+    if not 1 <= len(data) <= STDIN_PIECE:
+        raise AgentalError(f"A write of stdin is 1 byte to 1 MiB, not {len(data)} bytes.")
+    return Call("POST", f"{path}/{quote(command_id, safe='')}/stdin", query={"offset": str(offset)}, body=bytes(data), replay=True)
+
+
+def write_stdin(path: str, command_id: str, data: bytes, offset: int, config: Settings) -> Steps:
+    """Writes all of data to a command's stdin from offset, and answers the offset after it as the API says it.
+
+    Data is sent in pieces of at most 1 MiB. A command that is not reading takes part of a piece,
+    and the rest is sent again until it has all been taken, so this waits for as long as the
+    command does not read: it ends when the command ends, with command_ended. A refusal with
+    stdin_offset goes on from where the API says, as long as that is within data; a
+    stdin_unreachable sends the same bytes again, max_retries times in a row at most.
+    """
+    start = offset
+    end = offset + len(data)
+    at = offset
+    unreachable = 0
+    while at < end:
+        piece = data[at - start : at - start + STDIN_PIECE]
+        try:
+            answer = yield from one(stdin_call(path, command_id, piece, at))
+        except ApiError as error:
+            if error.code == "stdin_offset" and error.offset is not None and start <= error.offset < at:
+                at = error.offset
+                continue
+            if error.code == "stdin_unreachable" and unreachable < config.max_retries:
+                unreachable += 1
+                yield Sleep(config.retry_delay * 2 ** (unreachable - 1))
+                continue
+            raise
+        unreachable = 0
+        taken = int(answer["offset"])
+        if taken <= at:
+            # It took nothing in the API's 20 seconds: the command is not reading yet.
+            yield Sleep(config.poll_interval)
+        at = max(at, taken)
+    return at
 
 
 #: The most seconds the API holds a call for a job's run to end: 90, as the proxy in front of it gives up at 100.
@@ -389,11 +491,15 @@ def wait_job_run(path: str, timeout: float, config: Settings, deadline: float | 
         yield Sleep(config.poll_interval)
 
 
-def run_command(path: str, command: str | list[str] | tuple[str, ...], timeout_ms: int | None, config: Settings) -> Steps:
-    started = yield from start_command(path, command, timeout_ms)
+def run_command(
+    path: str, command: str | list[str] | tuple[str, ...], timeout_ms: int | None, config: Settings, extra: dict[str, Any] | None = None
+) -> Steps:
+    """Starts a command and reads it until it has ended: for at most COMMAND_TIMEOUT, or as long as it takes for one with no limit."""
+    started = yield from start_command(path, command, timeout_ms, extra)
     if started["status"] != "running":
         return started
-    return (yield from wait_command(path, started["id"], COMMAND_TIMEOUT, config))
+    no_limit = extra is not None and "timeoutMs" in extra and extra["timeoutMs"] is None
+    return (yield from wait_command(path, started["id"], None if no_limit else COMMAND_TIMEOUT, config))
 
 
 class StreamReader:
@@ -428,6 +534,103 @@ class StreamReader:
     def ended(self) -> None:
         if not self.exited:
             raise AgentalConnectionError("The stream ended before the command said what it exited with. It may still be running.")
+
+
+class EventLines:
+    """Turns the lines of a stream of server-sent events into (event, data) pairs. Comments, the heartbeats, give nothing."""
+
+    def __init__(self) -> None:
+        self._event = ""
+        self._data: list[str] = []
+
+    def line(self, line: str) -> tuple[str, str] | None:
+        """What a line completes: an event and its data, or nothing yet. A blank line ends an event."""
+        if line.startswith("event:"):
+            self._event = line[6:].strip()
+            return None
+        if line.startswith("data:"):
+            self._data.append(line[5:].removeprefix(" "))
+            return None
+        if line != "":
+            return None
+        if not self._event and not self._data:
+            return None
+        event, data = self._event or "message", "\n".join(self._data)
+        self._event, self._data = "", []
+        return event, data
+
+
+#: How many times in a row output() connects again after its stream was cut without anything read.
+OUTPUT_RECONNECTS = 5
+#: The longest output() waits before it opens the stream again after a continue that moved no offset: the command
+#: has exited and its end is not recorded yet, which the API does within its 30-second sweep.
+OUTPUT_EMPTY_CONTINUE_WAIT = 4.0
+#: The API's codes for a read that may work when sent again: it restarted, or the sandbox moved or is moving.
+_RESUMABLE_CODES = frozenset({"restarting", "sandbox_moved", "sandbox_migrating", "host_error", "internal_error"})
+
+
+def output_resumable(failure: AgentalError) -> bool:
+    """Whether a stream of output that failed so is worth opening again: a cut, a proxy's or a host's failure, a restart."""
+    if isinstance(failure, ApiError):
+        return failure.code in _RESUMABLE_CODES
+    if isinstance(failure, ProxyError):
+        return failure.status >= 500
+    return isinstance(failure, AgentalConnectionError)
+
+
+#: The longest a stream of output may be silent before it is taken as cut: the API sends a comment every 15 seconds.
+OUTPUT_SILENCE = 60.0
+
+
+class OutputReader:
+    """What a command's output stream has said, and where to go on from when it is cut.
+
+    at holds the next byte wanted of each stream. Once the stream closes, ended says the command
+    ended, continued that the API closed it on purpose: anything else was a cut, to be resumed from at.
+    """
+
+    def __init__(self, stdout: int, stderr: int) -> None:
+        for what, value in (("stdout", stdout), ("stderr", stderr)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise AgentalError(f"{what} is a byte offset, a whole number 0 or more, not {value!r}.")
+        self.at = {"stdout": stdout, "stderr": stderr}
+        self.ended = False
+        self.continued = False
+
+    def call(self, path: str, command_id: str, follow: bool) -> Call:
+        """The request that reads the output from where this reader is."""
+        query = {"stdout": str(self.at["stdout"]), "stderr": str(self.at["stderr"]), "follow": "1" if follow else "0"}
+        return Call("GET", f"{path}/{quote(command_id, safe='')}/output", query=query, timeout=OUTPUT_SILENCE)
+
+    def connected(self) -> None:
+        """A new stream begins: what the last one said of how it closed no longer holds."""
+        self.continued = False
+
+    def event(self, event: str, data: str) -> CommandOutputEvent | None:
+        """What an event says, as one to give the caller, or None for one that only moves where to go on from."""
+        if event == "output":
+            said = json.loads(data)
+            stream, offset, raw = said["stream"], int(said["offset"]), base64.b64decode(said["data"])
+            self.at[stream] = max(self.at[stream], offset + len(raw))
+            return CommandOutputEvent(type="output", stream=stream, offset=offset, data=raw)
+        if event == "gap":
+            said = json.loads(data)
+            stream, start, to = said["stream"], int(said["from"]), int(said["to"])
+            self.at[stream] = max(self.at[stream], to)
+            return CommandOutputEvent(type="gap", stream=stream, offset=start, to=to)
+        if event == "continue":
+            said = json.loads(data)
+            self.at = {"stdout": max(self.at["stdout"], int(said["stdout"])), "stderr": max(self.at["stderr"], int(said["stderr"]))}
+            self.continued = True
+            return None
+        if event == "end":
+            self.ended = True
+            return CommandOutputEvent(type="end", command=build(Command, json.loads(data)))
+        if event == "gone":
+            raise ApiError(410, "output_gone", "The command's sandbox no longer holds its output: get() gives the last of it, as last saved.")
+        if event == "error":
+            raise AgentalConnectionError(f"The output stream was cut: {data}")
+        return None
 
 
 #: The WebSocket subprotocol a sandbox's terminal speaks.

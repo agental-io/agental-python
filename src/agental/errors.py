@@ -25,6 +25,7 @@ class ApiError(AgentalError):
         retry_after_seconds: int | None = None,
         refused_last_hour: int | None = None,
         limits_url: str | None = None,
+        offset: int | None = None,
     ) -> None:
         super().__init__(message)
         self.status = status
@@ -46,6 +47,8 @@ class ApiError(AgentalError):
         #: On a create or start refused with 429 or 409: the console's page where the account sees every refusal, as
         #: limits() reads them. None on any other error.
         self.limits_url = limits_url
+        #: On a write of a command's stdin refused with stdin_offset: the offset to send from. None on any other error.
+        self.offset = offset
 
 
 #: The codes a create, fork or start is refused with, with the status 429, for its account's plan.

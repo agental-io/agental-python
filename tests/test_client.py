@@ -524,6 +524,20 @@ def test_a_fork_a_snapshot_and_a_port_ask_for_what_the_api_needs_of_them() -> No
     assert script.body(5) == {"ttlSeconds": None}
 
 
+def test_a_snapshot_says_its_state_and_none_from_an_api_that_does_not_send_it() -> None:
+    def snap(snapshot_id: str, **more: Any) -> dict[str, Any]:
+        return {"id": snapshot_id, "sandboxId": ID, "name": snapshot_id, "createdAt": "", "browsable": False, "size": "small", "sandboxDeleted": False, **more}
+
+    agental, script = scripted(
+        answer(200, {"snapshots": [snap("snap_1", state="ready"), snap("snap_2", state="deleting"), snap("snap_3", state="rolling_back"), snap("snap_4")]}),
+        answer(200, snap("snap_3", state="rolling_back")),
+    )
+    listed = agental.snapshots.list()
+    assert [each.state for each in listed] == ["ready", "deleting", "rolling_back", None]
+    assert agental.snapshots.get("snap_3").state == "rolling_back"
+    assert script.sent[1].url.path == "/v1/snapshots/snap_3"
+
+
 def test_a_spot_sandbox_is_asked_for_on_a_create_its_chance_read_changed_and_made_normal_with_none() -> None:
     spot = {"onReclaim": "delete", "warnAt": 0.3, "reclaimChance": 0.12}
     agental, script = scripted(answer(201, sandbox(spot=spot)), answer(200, sandbox(spot={**spot, "onReclaim": "delete"})), answer(200, sandbox(spot=None)))

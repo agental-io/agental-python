@@ -80,7 +80,31 @@ started = sandbox.commands.start("make")
 now = sandbox.commands.get(started.id)
 ```
 
-For work that must outlast ten minutes, start it in the background inside the machine: `sandbox.exec("nohup npm run dev > dev.log 2>&1 < /dev/null &")`.
+A started command runs until it exits, its time limit runs out, or its sandbox stops, whether or not anyone is watching. `no_timeout=True` gives it no limit of its own:
+
+```python
+dev = sandbox.commands.start(["npm", "run", "dev"], no_timeout=True, cwd="/opt/agental/app", env={"PORT": "3000"}, stdin=True)
+
+# its output, as bytes, from any offset: it goes on by itself after a cut
+for event in sandbox.commands.output(dev.id):
+    if event.type == "output":
+        print(event.data.decode(errors="replace"), end="")
+    elif event.type == "gap":
+        print(f"[{event.to - event.offset} bytes of {event.stream} were overwritten]")
+    else:
+        print("ended", event.command.end_reason)
+
+stdin = sandbox.commands.stdin(dev.id)
+stdin.write("rs\n")
+stdin.close()
+
+sandbox.commands.kill(dev.id, grace=10)  # TERM, then KILL after 10 seconds
+sandbox.commands.delete(dev.id)
+```
+
+- Each stream keeps its last 1 MiB while its sandbox runs: older bytes come as a `gap`, never silently missing. A command's `stdout` and `stderr` keep its last 65,536 characters after that.
+- `env` values are never written to agental's records or logs.
+- `signal(id, "INT")` reaches every process of the command, those it left in the background too.
 
 ## Jobs
 
@@ -184,6 +208,8 @@ snapshot = sandbox.snapshot("before-upgrade")
 sandbox.restore(snapshot.id)  # roll the disk back
 fresh = agental.sandboxes.create(snapshot_id=snapshot.id)
 ```
+
+A snapshot's `state` is `ready` when it can be used. `deleting` is one whose delete was asked and is finishing by itself, and `rolling_back` is one a roll-back of its sandbox to an earlier snapshot is discarding: it is `ready` again, usually within a minute, if the roll-back was not made. Rolling back to one that is not `ready`, or making a sandbox from it, raises an `ApiError` with the status 409 and the code `under_way`.
 
 ## Spot sandboxes
 

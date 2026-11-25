@@ -565,19 +565,83 @@ class KeptTerminal:
 
 
 @dataclass
+class CommandOutputFrom:
+    """The oldest byte of each of a command's streams that output() can still read."""
+
+    stdout: int
+    stderr: int
+
+
+@dataclass
+class CommandStdinState:
+    """Where a command's stdin stands, for one started with stdin=True."""
+
+    #: Whether it still takes bytes: False once it was closed, or the command ended.
+    open: bool
+    #: The bytes of it accepted so far: where the next write goes.
+    offset: int
+
+
+@dataclass
 class Command:
-    """A command left running in the background, and its output so far."""
+    """A command left running in the background, and its output so far.
+
+    The fields after finished_at are None in an answer from an API from before durable commands.
+    """
 
     id: str
     sandbox_id: str
     pid: int | None
     #: running, succeeded, failed or timed_out.
     status: str
+    #: The code the program exited with. None while it runs, and whenever it did not exit by itself: end_reason says why.
     exit_code: int | None
+    #: The last 65,536 characters it wrote to stdout, as last saved: while it runs, up to 30 seconds old. list() leaves
+    #: the output out, and it is "" there: get() reads it. output() reads every byte still kept.
     stdout: str
     stderr: str
     started_at: str
     finished_at: str | None
+    #: How it ended: exited, signaled, timed_out, failed_to_start, sandbox_stopped, sandbox_restarted, sandbox_moved or
+    #: lost. None while it runs.
+    end_reason: str | None = None
+    #: The signal that ended it, for end_reason signaled.
+    signal: int | None = None
+    #: Whether its sandbox is stopped with its memory kept: it goes on from where it was when the sandbox starts.
+    paused: bool | None = None
+    #: False while it is not known whether it started, after a start whose answer was lost.
+    launched: bool | None = None
+    #: The folder it runs in.
+    cwd: str | None = None
+    #: Its time limit in milliseconds. None for none, as for one started with no_timeout=True.
+    timeout_ms: int | None = None
+    #: Bytes it has written to stdout in all, whether still kept or not.
+    stdout_bytes: int | None = None
+    stderr_bytes: int | None = None
+    #: The oldest byte of each stream output() can still read, while its sandbox runs: each keeps its last 1 MiB.
+    output_from: CommandOutputFrom | None = None
+    #: Its stdin, for one started with stdin=True. None for one whose stdin is /dev/null.
+    stdin: CommandStdinState | None = None
+
+
+@dataclass
+class CommandOutputEvent:
+    """What output() reads of a command, in order.
+
+    ``output``: ``data``, the bytes of ``stream`` from ``offset``. Bytes are as the command wrote them:
+    a character may be split across two events.
+    ``gap``: bytes of ``stream`` from ``offset`` up to ``to`` were overwritten before they were read,
+    as each stream keeps its last 1 MiB.
+    ``end``: the command has ended, and ``command`` is it as it ended. Nothing comes after it.
+    """
+
+    type: Literal["output", "gap", "end"]
+    stream: Literal["stdout", "stderr"] | None = None
+    offset: int = 0
+    data: bytes = b""
+    #: For a gap: the first byte after it.
+    to: int | None = None
+    command: Command | None = None
 
 
 @dataclass
@@ -865,6 +929,10 @@ class Snapshot:
     sandbox_name: str | None = None
     #: The status of the sandbox it was taken of: deleted once it is. None from an API that does not send it.
     sandbox_status: str | None = None
+    #: "ready": it can be used. "deleting": its delete was asked and is finishing by itself; it is no longer charged and can
+    #: no longer be used. "rolling_back": a roll-back of its sandbox to an earlier snapshot is discarding it; usually within a minute it is
+    #: ready again if the roll-back was not made, and gone if it was. None from an API that does not send it.
+    state: str | None = None
 
 
 @dataclass
