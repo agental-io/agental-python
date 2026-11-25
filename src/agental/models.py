@@ -613,6 +613,8 @@ class Command:
     launched: bool | None = None
     #: The folder it runs in.
     cwd: str | None = None
+    #: The name it was started with, or None. A job's run has its job's name.
+    name: str | None = None
     #: Its time limit in milliseconds. None for none, as for one started with no_timeout=True.
     timeout_ms: int | None = None
     #: Bytes it has written to stdout in all, whether still kept or not.

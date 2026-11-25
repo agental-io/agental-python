@@ -284,11 +284,13 @@ def until_running(path: str, info: dict[str, Any], timeout: float, config: Setti
         info = yield from one(Call("GET", path, replay=True))
 
 
-def start(path: str, wait: bool, timeout: float, config: Settings, max_fee_micros: int | None = None) -> Steps:
-    """Starts a sandbox, and waits until it is running unless told not to. It returns the sandbox and what the start paid in burst fees."""
+def start(path: str, wait: bool, timeout: float, config: Settings, max_fee_micros: int | None = None, without_memory: bool = False) -> Steps:
+    """Starts a sandbox, and waits until it is running unless told not to. It returns the sandbox and what the start paid in burst fees.
+    without_memory starts it from its disk and lets the memory it was stopped with go, for good."""
     fee: int | None = None
     try:
-        answer: Answer = yield Call("POST", f"{path}/start", headers=burst_headers(max_fee_micros), replay=True)
+        body = {"withoutMemory": True} if without_memory else None
+        answer: Answer = yield Call("POST", f"{path}/start", body=body, headers=burst_headers(max_fee_micros), replay=True)
         info, fee = answer.body, burst_fee_of(answer.headers)
     except ApiError as error:
         # Whether the start worked is not known yet: the sandbox's status will say.
@@ -348,7 +350,9 @@ def start_command(path: str, command: str | list[str] | tuple[str, ...], timeout
     return (yield from one(Call("GET", f"{path}/{quote(started['id'], safe='')}", replay=True)))
 
 
-def start_extra(timeout: float | None, no_timeout: bool, cwd: str | None, env: Mapping[str, str] | None, stdin: bool) -> dict[str, Any]:
+def start_extra(
+    timeout: float | None, no_timeout: bool, cwd: str | None, env: Mapping[str, str] | None, stdin: bool, name: str | None = None
+) -> dict[str, Any]:
     """What a start is sent with besides the command and a time limit it was given, or an error that says what is wrong."""
     extra: dict[str, Any] = {}
     if no_timeout:
@@ -361,6 +365,8 @@ def start_extra(timeout: float | None, no_timeout: bool, cwd: str | None, env: M
         extra["env"] = dict(env)
     if stdin:
         extra["stdin"] = True
+    if name is not None:
+        extra["name"] = name
     return extra
 
 

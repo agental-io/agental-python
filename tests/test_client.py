@@ -120,6 +120,18 @@ def test_a_stop_sends_no_body_and_keep_memory_when_it_is_asked_for() -> None:
     assert box.info.memory_kept is True
 
 
+def test_a_start_sends_without_memory_when_it_is_asked_for() -> None:
+    agental, script = scripted(
+        answer(200, sandbox(status="stopped", memoryKept=True)),
+        answer(200, sandbox(memoryKept=False, memoryLost="Its memory was let go when it was started without it.")),
+    )
+    box = agental.sandboxes.get(ID)
+    box.start(without_memory=True)
+    assert (script.sent[1].method, script.sent[1].url.path) == ("POST", f"/v1/sandboxes/{ID}/start")
+    assert script.body(1) == {"withoutMemory": True}
+    assert box.info.memory_lost is not None and "let go" in box.info.memory_lost
+
+
 def test_a_resize_sends_the_size_and_restart_only_when_asked_and_the_sandbox_says_the_size_that_waits() -> None:
     agental, script = scripted(
         answer(200, sandbox()),

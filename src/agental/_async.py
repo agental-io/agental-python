@@ -740,6 +740,7 @@ class AsyncCommands:
         cwd: str | None = None,
         env: Mapping[str, str] | None = None,
         stdin: bool = False,
+        name: str | None = None,
     ) -> Command:
         """Starts a command and answers at once, with the command as it is then.
 
@@ -755,8 +756,12 @@ class AsyncCommands:
         refused. The command, its cwd and its variables are at most 63 KiB together.
 
         stdin=True lets stdin() write to it and close it; otherwise its stdin is /dev/null.
+
+        name says what it is for, as lists and the console show it, such as "dev server": agental
+        keeps no command line, so without one it shows as its id. Never copy its command line into
+        it, which can hold a secret: everyone who can see the sandbox sees the name.
         """
-        extra = _core.start_extra(timeout, no_timeout, cwd, env, stdin)
+        extra = _core.start_extra(timeout, no_timeout, cwd, env, stdin, name)
         return build(Command, await self._http.run(_core.start_command(self._path, command, _ms(timeout), extra)))
 
     async def list(self, *, limit: int | None = None) -> builtins.list[Command]:
@@ -891,6 +896,7 @@ class AsyncCommands:
         cwd: str | None = None,
         env: Mapping[str, str] | None = None,
         stdin: bool = False,
+        name: str | None = None,
     ) -> Command:
         """Starts a command and waits for it by reading it, so no request stays open while it runs.
 
@@ -898,7 +904,7 @@ class AsyncCommands:
         cut by a proxy on the way. It takes what start() takes. With no_timeout=True it waits for
         as long as the command runs, which can be never; otherwise for at most 11 minutes.
         """
-        extra = _core.start_extra(timeout, no_timeout, cwd, env, stdin)
+        extra = _core.start_extra(timeout, no_timeout, cwd, env, stdin, name)
         return build(Command, await self._http.run(_core.run_command(self._path, command, _ms(timeout), self._http.config, extra)))
 
 
@@ -1614,15 +1620,21 @@ class AsyncSandbox:
         timeout: float = _core.RESTORE_TIMEOUT,
         max_burst_fee_micros: int | None = None,
         max_burst_wait: float | None = None,
+        without_memory: bool = False,
     ) -> AsyncSandbox:
         """Starts it again, and waits until it is running.
 
-        Nothing that was running in it is started for you. An archived sandbox is brought
-        back first, which takes longer. max_burst_fee_micros and max_burst_wait are as for
-        Sandboxes.create(), and burst_fee_micros says what the start paid afterwards.
+        Nothing that was running in it is started for you, unless it was stopped keeping its
+        memory. An archived sandbox is brought back first, which takes longer.
+        max_burst_fee_micros and max_burst_wait are as for Sandboxes.create(), and
+        burst_fee_micros says what the start paid afterwards. without_memory starts it from its
+        disk and lets the memory it was stopped with go, for good: its files are kept, and the
+        programs that ran in it and anything in its memory are lost. It is for a sandbox whose
+        memory waits for a server that can take it back (capacity_exceeded); info.memory_lost
+        says so afterwards.
         """
         config = self._http.config
-        steps = _core.burst_waited(lambda: _core.start(self._path, wait, timeout, config, max_burst_fee_micros), max_burst_wait)
+        steps = _core.burst_waited(lambda: _core.start(self._path, wait, timeout, config, max_burst_fee_micros, without_memory), max_burst_wait)
         info, self.burst_fee_micros = await self._http.run(steps)
         self._read(info)
         return self
