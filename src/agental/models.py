@@ -935,6 +935,9 @@ class Snapshot:
     #: no longer be used. "rolling_back": a roll-back of its sandbox to an earlier snapshot is discarding it; usually within a minute it is
     #: ready again if the roll-back was not made, and gone if it was. None from an API that does not send it.
     state: str | None = None
+    #: For a snapshot with memory that only an old version of the server software can put back, which is being
+    #: retired: when that happens, ISO 8601. After it, a sandbox made from it starts from its disk. None otherwise.
+    memory_retires_at: str | None = None
 
 
 @dataclass
