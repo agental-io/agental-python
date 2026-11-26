@@ -1630,8 +1630,7 @@ class Sandbox:
         burst_fee_micros says what the start paid afterwards. without_memory starts it from its
         disk and lets the memory it was stopped with go, for good: its files are kept, and the
         programs that ran in it and anything in its memory are lost. It is for a sandbox whose
-        memory waits for a server that can take it back (capacity_exceeded); info.memory_lost
-        says so afterwards.
+        start failed with memory_cannot_resume; info.memory_lost says so afterwards.
         """
         config = self._http.config
         steps = _core.burst_waited(lambda: _core.start(self._path, wait, timeout, config, max_burst_fee_micros, without_memory), max_burst_wait)
