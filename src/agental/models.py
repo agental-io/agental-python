@@ -938,6 +938,13 @@ class Snapshot:
     #: For a snapshot with memory that only an old version of the server software can put back, which is being
     #: retired: when that happens, ISO 8601. After it, a sandbox made from it starts from its disk. None otherwise.
     memory_retires_at: str | None = None
+    #: Where it is kept. "server_and_storage": on its server, and a whole copy is in storage. "storage": in storage only, after its server was lost or emptied; rolling
+    #: back to it or making a sandbox from it restores the copy, which takes minutes. "server": on its server only, with no
+    #: whole copy in storage yet. "your_server": on a server your organization joined, which is never copied. A copy holds the disk, not
+    #: the memory. None from an API that does not send it.
+    kept: str | None = None
+    #: When its whole copy in storage was made, ISO 8601, for "server_and_storage" and "storage". None otherwise.
+    copied_at: str | None = None
 
 
 @dataclass

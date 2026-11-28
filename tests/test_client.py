@@ -550,6 +550,34 @@ def test_a_snapshot_says_its_state_and_none_from_an_api_that_does_not_send_it() 
     assert script.sent[1].url.path == "/v1/snapshots/snap_3"
 
 
+def test_a_snapshot_says_where_it_is_kept_and_since_when_its_copy_is_whole_and_none_from_an_api_that_does_not_send_them() -> None:
+    def snap(snapshot_id: str, **more: Any) -> dict[str, Any]:
+        return {"id": snapshot_id, "sandboxId": ID, "name": snapshot_id, "createdAt": "", "browsable": False, "size": "small", "sandboxDeleted": False, **more}
+
+    agental, _ = scripted(
+        answer(
+            200,
+            {
+                "snapshots": [
+                    snap("snap_1", kept="server_and_storage", copiedAt="2026-11-27T10:15:00.000Z"),
+                    snap("snap_2", kept="server", copiedAt=None),
+                    snap("snap_3", kept="storage", copiedAt="2026-11-26T09:00:00.000Z"),
+                    snap("snap_4", kept="your_server", copiedAt=None),
+                    snap("snap_5"),
+                ]
+            },
+        ),
+    )
+    listed = agental.snapshots.list()
+    assert [(each.kept, each.copied_at) for each in listed] == [
+        ("server_and_storage", "2026-11-27T10:15:00.000Z"),
+        ("server", None),
+        ("storage", "2026-11-26T09:00:00.000Z"),
+        ("your_server", None),
+        (None, None),
+    ]
+
+
 def test_a_spot_sandbox_is_asked_for_on_a_create_its_chance_read_changed_and_made_normal_with_none() -> None:
     spot = {"onReclaim": "delete", "warnAt": 0.3, "reclaimChance": 0.12}
     agental, script = scripted(answer(201, sandbox(spot=spot)), answer(200, sandbox(spot={**spot, "onReclaim": "delete"})), answer(200, sandbox(spot=None)))
